@@ -1,0 +1,89 @@
+Netflix
+
+ All Jobs
+
+Full Stack Software Engineer L5 - Enterprise Solutions
+USA - Remote
+
+Job Posting Date
+09-30-2025
+Job Requisition ID
+JR36312
+Teams
+Engineering
+Work Type
+Remote
+Netflix is one of the world's leading entertainment services, with over 300 million paid memberships in over 190 countries enjoying TV series, films and games across a wide variety of genres and languages. Members can play, pause and resume watching as much as they want, anytime, anywhere, and can change their plans at any time.
+
+| ABOUT YOU
+
+You are an individual who thrives on independence, has a passion for creating high-quality products, and can form close work partnerships with engineers, product managers, and designers. You are adept at problem-solving, enjoy a challenge, and have experience building scalable, high-performing applications. You have excellent communication and collaboration skills, and, most importantly, you have experience with back-end technologies, GenAI, LLMs, and possibly even applying them to enterprise problems.
+
+In this role, you'll help shape our strategy and vision and help us integrate AI into our enterprise employee-facing applications. You’ll be a part of the team chartered with building company-wide tools for the entire workforce and will partner with your peers to execute and deliver on the broader strategy and vision. You'll design, develop, and maintain products, infrastructure, and integrations with third-party and other teams’ services. You will collaborate effectively with myriad teams and communicate technical ideas persuasively. You influence and shape team and project direction through effective partnerships across the entire company to save Netflix time and money and enhance productivity for the whole workforce.
+
+| RESPONSIBILITIES
+
+Design/ architect, develop, test, deploy, and operate fully integrated solutions across build/buy that provide seamless end-to-end product experiences.
+
+Influence broad AI strategy and vision for internal enterprise applications.
+
+Collaborate with cross-functional teams to integrate generative AI solutions into existing workflow systems.
+
+Apply AI and GenAI responsibly to solve enterprise problems for the whole company.
+
+Design, build, and maintain infrastructure for modern integration methods between our applications, third-party services, and other Netflix teams' services.
+
+Collaborate extremely effectively with product managers, designers, other engineers, stakeholders, and vendors on projects within the team and across all of Netflix.
+
+Communicate technical ideas and work closely with other senior members of the team.
+
+| WE VALUE
+
+You have strong problem-solving skills and the ability to make data-driven decisions.
+
+You are passionate about engineering principles and developing tools and applications for impact with high quality.
+
+You thrive in a dynamic environment where needs shift and can clearly articulate priorities and critical outcomes to your team.
+
+| SKILLS AND EXPERIENCE
+
+5+ years of experience as a software engineer, demonstrably delivering on time, at quality
+
+Expert knowledge of data structures, algorithms, and modern design patterns and data layers
+
+Expert knowledge of Python and/or Java
+
+Demonstrable ability to lead a project and deliver an end product on time, at quality
+
+Passion to build internal solutions and own development of enterprise-wide applications
+
+Extensive knowledge of building quality APIs for internal and external products 
+
+Lots of experience integrating internal and third-party services into your solutions
+
+Expert knowledge of cloud computing platforms like Amazon Web Services (AWS), GCP
+
+You might have:
+
+Deep experience with Node, JavaScript, React, SpringBoot, NoSQL, GraphQL
+
+Experience automating workflows across the enterprise
+
+Our compensation structure consists solely of an annual salary; we do not have bonuses. You choose each year how much of your compensation you want in salary versus stock options. To determine your personal top of market compensation, we rely on market indicators and consider your specific job family, background, skills, and experience to determine your compensation in the market range. The range for this role is $100K - $600K.
+
+Inclusion is a Netflix value and we strive to host a meaningful interview experience for all candidates. If you want an accommodation/adjustment for a disability or any other reason during the hiring process, please send a request to your recruiting partner.
+
+We are an equal-opportunity employer and celebrate diversity, recognizing that diversity builds stronger teams. We approach diversity and inclusion seriously and thoughtfully. We do not discriminate on the basis of race, religion, color, ancestry, national origin, caste, sex, sexual orientation, gender, gender identity or expression, age, disability, medical condition, pregnancy, genetic makeup, marital status, or military service.
+
+Job is open for no less than 7 days and will be removed when the position is filled.
+
+Show Less
+
+Netflix House
+About Us
+Privacy
+Cookie Preferences
+Do Not Sell Or Share My Personal Information
+
+We use cookies to operate our services. We may also share information about your use of our site with partners who help us operate our business. Read more here or change your cookie preferences by selecting ‘Learn more’.
+Learn more OK
