@@ -38,7 +38,7 @@ STATE_TO_CITIES: Dict[str, List[str]] = {
         "Daly City", "Davis", "Downey", "El Centro", "El Cerrito", "El Monte", "Escondido", "Eureka", "Fairfield",
         "Fontana", "Fremont", "Fresno", "Fullerton", "Garden Grove", "Glendale", "Hayward", "Hollywood",
         "Huntington Beach", "Indio", "Inglewood", "Irvine", "La Habra", "Laguna Beach", "Lancaster", "Livermore",
-        "Lompoc", "Long Beach", "Los Angeles", "Malibu", "Martinez", "Marysville", "Menlo Park", "Merced",
+        "Lompoc", "Long Beach", "Los Angeles", "Los Gatos", "Malibu", "Martinez", "Marysville", "Menlo Park", "Merced",
         "Modesto", "Monterey", "Mountain View", "Napa", "Needles", "Newport Beach", "Norwalk", "Novato",
         "Oakland", "Oceanside", "Ojai", "Ontario", "Orange", "Oroville", "Oxnard", "Pacific Grove",
         "Palm Springs", "Palmdale", "Palo Alto", "Pasadena", "Petaluma", "Pomona", "Port Hueneme",

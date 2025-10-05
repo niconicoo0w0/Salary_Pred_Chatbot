@@ -22,7 +22,9 @@ NOISE_LINE_HINTS = [
     "logo", "share", "save", "easy apply", "promoted", "actively reviewing",
     "on-site", "onsite", "hybrid", "remote", "full-time", "part-time",
     "contract", "matches your job preferences", "message", "about the job",
-    "rate-", "location-", "multiple locations", "apply", "premium", "job poster"
+    "rate-", "location-", "multiple locations", "apply", "premium", "job poster",
+    "our benefits", "learn more", "company website", "company description", "company overview",
+    "company values", "company culture", "company history", "company mission", "company vision",
 ]
 
 # City name validation regex
