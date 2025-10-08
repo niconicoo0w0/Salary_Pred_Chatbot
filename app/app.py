@@ -1,5 +1,5 @@
-# app.py — Training features only + derived features; US-only location with dependent City dropdown
-# JD textbox to autofill Title/Location
+# app.py — Aligns to new schema: size_band only (no min/max); training features only + derived features
+# US-only location with dependent City dropdown; optional CompanyAgent backfill.
 
 import os
 import sys
@@ -10,18 +10,21 @@ import numpy as np
 import pandas as pd
 import gradio as gr
 import joblib
+from pathlib import Path
 
-# ---- Project utils (assumed to exist in utils/) ----
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from utils.constants import PIPELINE_PATH, RAW_INPUTS, OPENAI_MODEL
-from utils.us_locations import US_STATES, STATE_TO_CITIES
-from utils.helpers import (
-    titlecase, looks_like_location, clean_text, strip_paren_noise,
-    looks_like_noise_line, fmt_none
-)
-from utils.jd_parsing import CITY_REGEX, parse_jd
+# Add project root to Python path
+project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(project_root))
 
-# ---- Optional LLM client ----
+
+# --- Local project imports (must exist in project root)
+from utils import featurizers
+from utils import helpers
+from utils import jd_parsing
+from utils import us_locations
+from utils import constants
+
+# --- Optional LLM client ---
 try:
     from openai import OpenAI
     from dotenv import load_dotenv
@@ -30,25 +33,66 @@ try:
 except Exception:
     client = None
 
-# ---- Pipeline and custom transformers (needed for unpickling) ----
-import featurizers   # noqa: F401
+# --- Company agent (optional enrichment) ---
+try:
+    from agent import CompanyAgent
+    _agent = CompanyAgent()
+except Exception:
+    _agent = None
 
-# ---- Company agent (optional enrichment) ----
-from agent import CompanyAgent
-_agent = CompanyAgent()
+# --- Load pipeline & schema ---
+PIPELINE_PATH = os.environ.get("PIPELINE_PATH", getattr(constants, "PIPELINE_PATH", "models/pipeline_new.pkl"))
+SCHEMA_PATH   = os.environ.get("SCHEMA_PATH", "models/schema.json")
 
+# Fallback schema (must match training exactly)
+_FALLBACK_SCHEMA = {
+    "raw_inputs": ["Rating","age","Sector","Type of ownership","size_band","Job Title","Location"],
+    "numeric": ["Rating","age"],
+    "categorical_base": ["Sector","Type of ownership","size_band"],
+    "added_by_featurizers": ["seniority","loc_tier"]
+}
+
+try:
+    with open(SCHEMA_PATH, "r") as f:
+        _SCHEMA = (f.read() or "").strip()
+        _SCHEMA = __import__("json").loads(_SCHEMA)
+except Exception:
+    _SCHEMA = _FALLBACK_SCHEMA
+
+# Validate essential pieces
+_EXPECTED_RAW = ["Rating","age","Sector","Type of ownership","size_band","Job Title","Location"]
+if _SCHEMA.get("raw_inputs") != _EXPECTED_RAW:
+    # Hard override to ensure inference aligns with training
+    _SCHEMA = _FALLBACK_SCHEMA
+
+# Load pipeline AFTER importing featurizers
 pipe = joblib.load(PIPELINE_PATH)
 
+# ------------- Helpers (thin wrappers around local modules) -------------
+titlecase = helpers.titlecase
+looks_like_location = helpers.looks_like_location
+clean_text = helpers.clean_text
+strip_paren_noise = helpers.strip_paren_noise
+looks_like_noise_line = helpers.looks_like_noise_line
+fmt_none = helpers.fmt_none
 
-# ====================== Model helpers ======================
+CITY_REGEX = jd_parsing.CITY_REGEX
+US_STATES = us_locations.US_STATES
+STATE_TO_CITIES = us_locations.STATE_TO_CITIES
+
+OPENAI_MODEL = getattr(constants, "OPENAI_MODEL", os.environ.get("OPENAI_MODEL", "gpt-4o-mini"))
+
+SIZE_BANDS = ["Small","Mid","Large","XL","Enterprise"]
+
+
 def predict_point_range(df_row: pd.DataFrame) -> Tuple[float, float, float]:
     y = float(pipe.predict(df_row)[0])
     return y, max(0.0, y * 0.9), y * 1.1
 
 
 def _derive_features_with_pipeline_steps(row: Dict[str, Any]) -> Dict[str, Any]:
-    """Mirror pipeline’s featurizers to expose 'seniority' and 'loc_tier'."""
-    df0 = pd.DataFrame([row], columns=RAW_INPUTS)
+    """Mirror pipeline’s featurizers to expose 'seniority' and 'loc_tier' for display."""
+    df0 = pd.DataFrame([row], columns=_SCHEMA["raw_inputs"])
     seniority_step = pipe.named_steps.get("seniority", None)
     loc_tier_step = pipe.named_steps.get("loc_tier", None)
 
@@ -63,335 +107,184 @@ def _derive_features_with_pipeline_steps(row: Dict[str, Any]) -> Dict[str, Any]:
     return {"seniority": seniority, "loc_tier": loc_tier}
 
 
-# ====================== Seniority detection (robust) ======================
-from collections import Counter
+# ---------------- Sector mapping to training set ----------------
+_TRAINING_SECTORS = set([
+    "Arts, Entertainment & Recreation",
+    "Construction, Repair & Maintenance",
+    "Oil, Gas, Energy & Utilities",
+    "Accounting & Legal",
+    "Aerospace & Defense",
+    "Agriculture & Forestry",
+    "Biotech & Pharmaceuticals",
+    "Business Services",
+    "Consumer Services",
+    "Education",
+    "Finance",
+    "Government",
+    "Health Care",
+    "Information Technology",
+    "Insurance",
+    "Manufacturing",
+    "Media",
+    "Mining & Metals",
+    "Non-Profit",
+    "Real Estate",
+    "Retail",
+    "Telecommunications",
+    "Transportation & Logistics",
+    "Travel & Tourism",
+])
 
-LEVEL_BUCKETS = ["intern", "entry", "junior", "mid", "senior", "staff", "principal", "lead", "manager", "director", "vp", "cxo"]
-LEVEL_ORDER = {b: i for i, b in enumerate(LEVEL_BUCKETS)}
-
-# mapping to your 6 final buckets
-MAP6 = {
-    "intern": "intern",
-    "entry": "entry",
-    "junior": "entry",
-    "mid": "entry",
-    "senior": "senior",
-    "staff": "staff",
-    "principal": "staff",
-    "lead": "staff",
-    "manager": "manager",
-    "director": "manager",
-    "vp": "vp",
-    "cxo": "vp",
+# minimal, robust normalization（只在明显同义时做映射；否则保留原词以便 OHE 忽略未知）
+_SECTOR_CANON = {
+    # common variants -> training sector
+    "entertainment & media": "Media",
+    "media & entertainment": "Media",
+    "entertainment": "Media",
+    "telecom": "Telecommunications",
+    "information technology services": "Information Technology",
+    "it": "Information Technology",
+    "healthcare": "Health Care",
+    "biotech": "Biotech & Pharmaceuticals",
+    "pharmaceuticals": "Biotech & Pharmaceuticals",
+    "pharma": "Biotech & Pharmaceuticals",
+    "banking": "Finance",
+    "financial services": "Finance",
+    "insurance & finance": "Finance",
+    "logistics": "Transportation & Logistics",
+    "transportation": "Transportation & Logistics",
+    "aerospace": "Aerospace & Defense",
+    "defense": "Aerospace & Defense",
+    "construction": "Construction, Repair & Maintenance",
+    "repair & maintenance": "Construction, Repair & Maintenance",
+    "education & training": "Education",
+    "nonprofit": "Non-Profit",
+    "non-profit": "Non-Profit",
+    "retail & e-commerce": "Retail",
+    "e-commerce": "Retail",
+    "consumer": "Consumer Services",
+    "government & public sector": "Government",
+    "public sector": "Government",
+    "oil & gas": "Oil, Gas, Energy & Utilities",
+    "energy & utilities": "Oil, Gas, Energy & Utilities",
+    "mining": "Mining & Metals",
+    "metals": "Mining & Metals",
 }
 
-TOKEN_TO_BUCKET = {
-    r"\bintern(ship)?\b": "intern",
-    r"\b(entry[-\s]?level|new\s*grad|new[-\s]?graduate)\b": "entry",
-    r"\b(jr|junior|assoc(iate)?)\b": "junior",
-    r"\bmid(-| )?level\b": "mid",
-    r"\b(sr|senior|sr\.)\b": "senior",
-    r"\bstaff\b": "staff",
-    r"\b(principal|princi?pal)\b": "principal",
-    r"\blead\b": "lead",
-    r"\b(architect)\b": "principal",
-}
-
-MANAGER_TOKENS = {
-    r"\b(manager|mgr)\b": "manager",
-    r"\b(director|dir\.)\b": "director",
-    r"\b(vp|vice\s*president)\b": "vp",
-    r"\b(head\s+of|head,)\b": "director",
-    r"\b(cdo|cto|cpo|cio|ciso|chief\s+[a-z]+(?:\s+officer)?)\b": "cxo",
-}
-
-LEVEL_NUM_TO_BUCKET = {
-    1: "entry", 2: "junior", 3: "mid", 4: "senior", 5: "staff", 6: "principal", 7: "principal"
-}
-ROMAN_TO_INT = {"i": 1, "ii": 2, "iii": 3, "iv": 4, "v": 5, "vi": 6, "vii": 7}
-
-YEARS_TO_BUCKET = [
-    (0, 1, "entry"),
-    (1, 3, "junior"),
-    (3, 5, "mid"),
-    (5, 7, "senior"),
-    (7, 10, "staff"),
-    (10, 99, "principal"),
-]
-
-def _extract_years_of_exp(text: str) -> Optional[int]:
-    if not text:
+def map_sector_to_training(s: Optional[str]) -> Optional[str]:
+    if not s:
         return None
-    t = text.lower()
-    m = re.search(r"(\d{1,2})\s*\+?\s*(?:years|yrs)\b.*?(?:experience|exp)?", t)
-    if m:
-        try:
-            return int(m.group(1))
-        except Exception:
+    t = str(s).strip()
+    low = t.lower()
+    if low in _SECTOR_CANON:
+        return _SECTOR_CANON[low]
+    # direct match
+    if t in _TRAINING_SECTORS:
+        return t
+    # lenient contain checks
+    for k, v in _SECTOR_CANON.items():
+        if k in low:
+            return v
+    return t  # keep original; OneHot(handle_unknown="ignore") will be safe
+
+
+# -------------- Company profile -> schema normalization --------------
+def employees_to_size_band(n: Optional[float]) -> Optional[str]:
+    try:
+        if n is None or (isinstance(n, float) and np.isnan(n)):
             return None
-    return None
-
-def _bucket_from_years(years: int) -> Optional[str]:
-    for lo, hi, b in YEARS_TO_BUCKET:
-        if lo <= years < hi:
-            return b
-    return None
-
-def _extract_numeric_level(title: str) -> Optional[int]:
-    if not title:
+        n = float(n)
+    except Exception:
         return None
-    t = title.lower()
-    m = re.search(r"\b(?:l|level)[-\s]?(\d)\b", t)  # L5 / Level 5
-    if m:
-        return int(m.group(1))
-    m = re.search(r"\b(iii|ii|iv|v|vi|vii)\b", t)   # II / III / IV...
-    if m:
-        return ROMAN_TO_INT.get(m.group(1).lower())
-    m = re.search(r"\b(?:eng(?:ineer)?|sde|developer|software\s+engineer)\s*(\d)\b", t)  # Engineer 2
-    if m:
-        return int(m.group(1))
-    m = re.search(r"\b(?:sde|engineer)\s*(ii|iii|iv|v)\b", t)  # SDE II
-    if m:
-        return ROMAN_TO_INT.get(m.group(1).lower())
+    if n < 50: return "Small"
+    if n < 200: return "Mid"
+    if n < 1000: return "Large"
+    if n < 10000: return "XL"
+    return "Enterprise"
+
+def coerce_size_label_to_band(lbl: Optional[str]) -> Optional[str]:
+    if not lbl:
+        return None
+    t = str(lbl).strip().lower()
+    for b in SIZE_BANDS:
+        if b.lower() == t:
+            return b
+    # light normalization
+    if "small" in t: return "Small"
+    if re.search(r"\bmid(dle)?\b", t): return "Mid"
+    if "large" in t: return "Large"
+    if t in {"xl","x-large","x large","extra large","xlarge"}: return "XL"
+    if "enterprise" in t: return "Enterprise"
     return None
 
-def _score_votes(votes: List[str]) -> Tuple[Optional[str], float, List[str]]:
-    if not votes:
-        return None, 0.0, []
-    if any(v in ["intern"] for v in votes):
-        return "intern", 1.0, ["forced intern rule", f"votes={votes}"]
-    if any(v in ["entry", "new grad", "new graduate", "college grad"] for v in votes):
-        return "entry", 1.0, ["forced entry rule", f"votes={votes}"]
-
-    counts = Counter(votes)
-    most_common, freq = counts.most_common(1)[0]
-    max_freq = max(counts.values())
-    tied = [b for b, c in counts.items() if c == max_freq]
-    if len(tied) > 1:
-        agg = min(tied, key=lambda b: LEVEL_ORDER[b])  # bias to lower seniority when tied
-    else:
-        agg = most_common
-
-    conf = freq / len(votes)
-    idxs = [LEVEL_ORDER[v] for v in votes if v in LEVEL_ORDER]
-    if idxs and (max(idxs) - min(idxs) > 2):
-        conf *= 0.7  # penalize wide disagreement
-    return agg, round(conf, 2), [f"votes={votes}", f"agg={agg}", f"conf={conf:.2f}"]
-
-def detect_seniority(title: str, jd_text: str = "") -> Tuple[Optional[str], float, List[str]]:
-    votes: List[str] = []
-    reasons: List[str] = []
-    t = (title or "").lower()
-
-    # managerial overrides
-    for rx, bucket in MANAGER_TOKENS.items():
-        if re.search(rx, t):
-            votes.append(bucket)
-            reasons.append(f"mgr:{bucket}")
-
-    # IC tokens
-    for rx, bucket in TOKEN_TO_BUCKET.items():
-        if re.search(rx, t):
-            votes.append(bucket)
-            reasons.append(f"tok:{bucket}")
-
-    # numeric/roman levels
-    lvl = _extract_numeric_level(t)
-    if lvl is not None and lvl in LEVEL_NUM_TO_BUCKET:
-        b = LEVEL_NUM_TO_BUCKET[lvl]
-        votes.append(b)
-        reasons.append(f"level:{lvl}->{b}")
-
-    # years of experience from JD body
-    yrs = _extract_years_of_exp(jd_text or "")
-    if yrs is not None:
-        b = _bucket_from_years(yrs)
-        if b:
-            votes.append(b)
-        reasons.append(f"yoe:{yrs}->{b}")
-
-    if not votes:
-        return "mid", 0.45, ["default:mid"]
-
-    bucket, conf, score_reasons = _score_votes(votes)
-    return bucket, conf, reasons + score_reasons
+def choose_size_band_from_profile(prof: Dict[str, Any]) -> Optional[str]:
+    # priority: size_band -> Size -> size_label -> employees -> (min,max)
+    if prof.get("size_band"):
+        return coerce_size_label_to_band(prof.get("size_band"))
+    if prof.get("Size"):
+        b = coerce_size_label_to_band(prof.get("Size"))
+        if b: return b
+    if prof.get("size_label"):
+        b = coerce_size_label_to_band(prof.get("size_label"))
+        if b: return b
+    if prof.get("employees") is not None:
+        return employees_to_size_band(prof.get("employees"))
+    # fallback: try min/max midpoint
+    if prof.get("min_size") is not None and prof.get("max_size") is not None:
+        try:
+            mid = (float(prof["min_size"]) + float(prof["max_size"])) / 2.0
+            return employees_to_size_band(mid)
+        except Exception:
+            pass
+    return None
 
 
-# ====================== Job Title detection ======================
-import difflib
+def normalize_company_profile_to_schema(prof: Dict[str, Any]) -> Dict[str, Any]:
+    """Map whatever the agent returned to the exact training inputs we need."""
+    return {
+        "Sector": map_sector_to_training(prof.get("Sector") or prof.get("sector")),
+        "Type of ownership": prof.get("Type of ownership") or prof.get("ownership"),
+        "size_band": choose_size_band_from_profile(prof),
+        "age": prof.get("age") or prof.get("company_age"),  # agent可能给 age 或 company_age
+        "hq_city": prof.get("hq_city"),
+        "hq_state": prof.get("hq_state"),
+        "__sources__": prof.get("__sources__", []),
+    }
 
-SENIORITY_WORDS = [
-    "intern", "junior", "jr", "mid", "senior", "sr", "staff", "principal", "lead",
-    "manager", "director", "vp", "head", "chief", "architect", "fellow", "ii", "iii", "iv", "l4", "l5", "l6", "l7"
-]
-EMPLOYMENT_HINTS = [
-    "full-time", "full time", "part-time", "contract", "temporary", "internship", "co-op",
-    "remote", "hybrid", "on-site", "onsite"
-]
-DEPT_WORDS = [
-    "platform", "infrastructure", "backend", "front end", "frontend", "full stack", "mobile", "ios", "android", "web",
-    "data", "ml", "ai", "nlp", "llm", "cv", "vision", "security", "cloud", "devops", "sre", "qa", "test", "release",
-    "embedded", "firmware", "robotics", "systems", "site reliability", "database", "dba", "analytics", "bi", "etl",
-    "governance", "privacy", "compliance", "salesforce", "sap", "erp", "product", "program", "project"
-]
 
-TITLE_TAXONOMY = {
-    "software engineer": ["swe", "software developer", "application engineer", "full stack engineer",
-                          "backend engineer", "frontend engineer", "web developer", "mobile engineer",
-                          "ios engineer", "android engineer", "game developer", "unity developer"],
-    "data scientist": ["applied scientist", "machine learning scientist", "ml scientist",
-                       "research scientist (ml)", "quantitative researcher", "statistician"],
-    "machine learning engineer": ["ml engineer", "ai engineer", "deep learning engineer", "llm engineer",
-                                  "gen ai engineer", "nlp engineer", "computer vision engineer", "cv engineer",
-                                  "research engineer"],
-    "data engineer": ["etl engineer", "data platform engineer", "analytics engineer", "bi engineer",
-                      "big data engineer", "spark engineer", "dbt engineer", "data ops engineer"],
-    "data analyst": ["business analyst", "bi analyst", "analytics analyst", "product analyst", "insights analyst"],
-    "ml ops engineer": ["mlops engineer", "ml platform engineer", "ml infra engineer", "model ops engineer"],
-    "site reliability engineer": ["sre", "reliability engineer"],
-    "devops engineer": ["cloud engineer", "platform engineer", "infra engineer"],
-    "security engineer": ["application security engineer", "appsec", "cloud security engineer", "security analyst"],
-    "product manager": ["pm", "technical product manager", "ai product manager", "platform product manager"],
-    "program manager": ["technical program manager", "tpm"],
-    "project manager": [],
-    "solutions architect": ["solution architect", "enterprise architect", "data architect", "cloud architect"],
-    "qa engineer": ["test engineer", "software test engineer", "quality engineer", "automation engineer"],
-    "database administrator": ["dba", "database engineer"],
-    "ux designer": ["product designer", "ui/ux designer", "interaction designer", "ux researcher"],
-    "sales engineer": ["solutions engineer", "pre-sales engineer"],
-    "technical writer": ["documentation engineer"],
-}
-TITLE_CANON = set(TITLE_TAXONOMY.keys())
-TITLE_ALIASES = {alias: canon for canon, aliases in TITLE_TAXONOMY.items() for alias in aliases}
-
-def _norm(s: str) -> str:
-    s = (s or "").lower().strip()
-    s = re.sub(r"[\(\)\[\]\{\}]+", " ", s)
-    s = re.sub(r"[/|]", " ", s)
-    s = re.sub(r"\s{2,}", " ", s)
-    return s
-
-def _postclean_title(t: str) -> str:
-    t = strip_paren_noise(t)
-    t = re.sub(r"\b(remote|hybrid|on[-\s]?site|full[-\s]?time|part[-\s]?time)\b", "", t, flags=re.I)
-    t = re.sub(r"\s{2,}", " ", t).strip(" -–—")
-    return titlecase(t.strip())
-
-def _line_looks_like_title(line: str) -> bool:
-    t = _norm(line)
-    parts = t.split()
-    if len(parts) < 2 or len(parts) > 12:
-        return False
-    if any(h in t for h in EMPLOYMENT_HINTS):
-        return False
-    return any(w in t for w in ["engineer", "developer", "scientist", "analyst", "architect",
-                                 "manager", "designer", "writer", "researcher", "administrator", "admin"])
-
-def _guess_from_patterns(txt: str) -> Optional[str]:
+# ---------------- JD title & location ----------------
+def detect_job_title(jd_text: str) -> Optional[str]:
+    if not jd_text or not jd_text.strip():
+        return None
+    # 简约版：沿用你 helpers/jd_parsing 的清洗+启发式
+    txt = clean_text(jd_text)
+    # 1) 明确字段
     pats = [
         r"(?im)^\s*(?:job\s*)?title\s*[:\-]\s*(.+)$",
         r"(?im)^\s*(?:position|role)\s*[:\-]\s*(.+)$",
-        r"(?is)\bwe\s+are\s+looking\s+for\s+(an?\s+)?([A-Za-z0-9 \-\/&\(\)\.']{3,80}?)(?=\s+(?:to|who|that|with|for|in)\b)",
-        r"(?is)\bas\s+(an?\s+)?([A-Za-z0-9 \-\/&\(\)\.']{3,80}?)(?=\s+(?:you|the|we)\b)"
     ]
     for rx in pats:
         m = re.search(rx, txt)
         if m:
-            cand = m.group(1) if m.lastindex == 1 else (m.group(2) if m.lastindex and m.lastindex >= 2 else m.group(0))
-            cand = _postclean_title(cand)
-            if _line_looks_like_title(cand):
-                return cand
-    return None
-
-def _canonize_head(t: str) -> str:
-    tnorm = _norm(t)
-    pool = list(TITLE_CANON) + list(TITLE_ALIASES.keys())
-    match = difflib.get_close_matches(tnorm, pool, n=1, cutoff=0.85)
-    if match:
-        m = match[0]
-        return TITLE_ALIASES.get(m, m)
-    for head in TITLE_CANON:
-        if head in tnorm:
-            return head
-    return t
-
-def detect_job_title(jd_text: str, top_n: int = 3) -> Tuple[Optional[str], List[Tuple[str, float, str]]]:
-    """
-    Returns (best_title, debug_list) where debug_list = [(candidate, score, reason), ...]
-    """
-    if not jd_text or not jd_text.strip():
-        return None, []
-    txt = clean_text(jd_text)
-
-    m = _guess_from_patterns(txt)
-    if m:
-        return _postclean_title(m), [(m, 0.95, "pattern")]
-
+            cand = strip_paren_noise(m.group(1).strip())
+            if cand and not looks_like_location(cand):
+                return titlecase(cand)
+    # 2) 前几行找头衔类词
     lines = [ln.strip() for ln in txt.split("\n") if ln.strip()]
-    cand_scores: List[Tuple[str, float, str]] = []
-    for i, ln in enumerate(lines[:40]):
+    for ln in lines[:25]:
         if looks_like_noise_line(ln.lower()):
             continue
-        if not _line_looks_like_title(ln):
-            continue
+        if re.search(r"\b(engineer|scientist|analyst|developer|researcher|manager|architect|designer)\b", ln.lower()):
+            cand = strip_paren_noise(ln.strip())
+            if cand and not looks_like_location(cand):
+                return titlecase(cand)
+    return None
 
-        t = _postclean_title(ln)
-        tnorm = _norm(t)
-        score = 0.0
-        reason = []
-
-        score += max(0, 1.0 - i / 40.0) * 0.5  # earlier line → higher score
-        reason.append(f"pos={i}")
-
-        if any(k in tnorm for k in ["engineer", "developer", "scientist", "analyst", "architect", "manager", "designer", "writer", "researcher", "administrator"]):
-            score += 0.5; reason.append("has_head")
-
-        if any(re.search(rf"\b{re.escape(w)}\b", tnorm) for w in SENIORITY_WORDS):
-            score += 0.2; reason.append("seniority")
-
-        if any(w in tnorm for w in DEPT_WORDS):
-            score += 0.2; reason.append("dept")
-
-        words = t.split()
-        if 2 <= len(words) <= 8:
-            score += 0.2; reason.append("len_ok")
-        else:
-            score -= 0.1; reason.append("len_penalty")
-
-        head = _canonize_head(t)
-        if head in TITLE_CANON:
-            score += 0.2; reason.append(f"canon={head}")
-
-        cand_scores.append((t, score, ",".join(reason)))
-
-    cand_scores.sort(key=lambda x: x[1], reverse=True)
-    best = cand_scores[0][0] if cand_scores else None
-
-    # Optional: LLM fallback if configured
-    if not best and client and os.environ.get("OPENAI_API_KEY"):
-        prompt = ("Extract the exact job title from this job description. "
-                  "Return only the title, no extra text:\n\n" + txt[:6000])
-        try:
-            r = client.chat.completions.create(
-                model=OPENAI_MODEL,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.0,
-            )
-            guess = (r.choices[0].message.content or "").strip()
-            if guess:
-                best = _postclean_title(guess)
-                cand_scores = [(best, 0.7, "llm")]
-        except Exception:
-            pass
-
-    return best, cand_scores[:top_n]
-
-
-def _try_parse_location_from_jd(jd_text: str) -> Optional[Tuple[str, str]]:
+def try_parse_location_from_jd(jd_text: str) -> Optional[Tuple[str, str]]:
     if not jd_text or not jd_text.strip():
         return None
     try:
-        parsed = parse_jd(jd_text)
+        parsed = jd_parsing.parse_jd(jd_text)
     except Exception:
         return None
     loc = (parsed or {}).get("location") or ""
@@ -405,7 +298,7 @@ def _try_parse_location_from_jd(jd_text: str) -> Optional[Tuple[str, str]]:
     return None
 
 
-# ====================== Explanation (LLM or fallback) ======================
+# ---------------- LLM explanation ----------------
 def llm_explain(context: Dict[str, Any], derived: Dict[str, Any], point: float, low: float, high: float) -> str:
     if client is None or not os.environ.get("OPENAI_API_KEY"):
         parts = [
@@ -414,12 +307,11 @@ def llm_explain(context: Dict[str, Any], derived: Dict[str, Any], point: float, 
             f"- Job title: {fmt_none(context.get('Job Title'))}",
             f"- Location: {fmt_none(context.get('Location'))}",
             f"- Rating: {fmt_none(context.get('Rating'))}, Company age: {fmt_none(context.get('age'))}",
-            f"- Company size (min-max): {fmt_none(context.get('min_size'))}-{fmt_none(context.get('max_size'))}",
-            f"- Sector: {fmt_none(context.get('Sector'))}, Ownership: {fmt_none(context.get('Type of ownership'))}, Size label: {fmt_none(context.get('Size'))}",
+            f"- Sector: {fmt_none(context.get('Sector'))}, Ownership: {fmt_none(context.get('Type of ownership'))}, Size band: {fmt_none(context.get('size_band'))}",
             "Derived (from pipeline):",
             f"- Seniority: {fmt_none(derived.get('seniority'))}",
             f"- Location tier: {fmt_none(derived.get('loc_tier'))}",
-            "Likely drivers: market (location tier), seniority inferred from title, company size/age, sector/ownership.",
+            "Likely drivers: market (location tier), seniority inferred from title, size band/age, sector/ownership.",
         ]
         return " ".join(parts)
 
@@ -429,7 +321,7 @@ You are a careful compensation assistant.
 RULES
 - ≤ 110 words. No invented numbers.
 - Only reference training inputs and derived features:
-  Inputs: Job Title, Location, Rating, age, min_size, max_size, Sector, Type of ownership, Size.
+  Inputs: Job Title, Location, Rating, age, Sector, Type of ownership, size_band.
   Derived: seniority (from title), loc_tier (from location).
 - Mention 2-3 likely drivers tied to these. Neutral tone.
 
@@ -437,8 +329,7 @@ INPUTS
 - Job title: {context.get('Job Title','—')}
 - Location: {context.get('Location','—')}
 - Rating: {context.get('Rating','—')}, Company age: {context.get('age','—')}
-- Company size (min-max): {context.get('min_size','—')}-{context.get('max_size','—')}
-- Sector: {context.get('Sector','—')}, Ownership: {context.get('Type of ownership','—')}, Size label: {context.get('Size','—')}
+- Sector: {context.get('Sector','—')}, Ownership: {context.get('Type of ownership','—')}, Size band: {context.get('size_band','—')}
 
 DERIVED (pipeline)
 - Seniority: {fmt_none(derived.get('seniority'))}
@@ -468,18 +359,38 @@ FORMAT
                 f"(range ${low:,.0f}-${high:,.0f}).")
 
 
-# ====================== Backend serving ======================
+# ---------------- Core serve() ----------------
+def _to_model_row_from_ui(
+    job_title: str,
+    location: str,
+    rating: float,
+    age: float,
+    sector: str,
+    type_of_ownership: str,
+    size_band: str,
+) -> Dict[str, Any]:
+    row_full = {
+        "Job Title": (job_title or "").strip(),
+        "Location": (location or "").strip(),
+        "Rating": float(rating) if rating is not None else float("nan"),
+        "age": float(age) if age not in (None, "") else float("nan"),
+        "Sector": map_sector_to_training((sector or "").strip()),
+        "Type of ownership": (type_of_ownership or "").strip(),
+        "size_band": (size_band or "").strip() if size_band in SIZE_BANDS else "",
+    }
+    cols = _SCHEMA["raw_inputs"]  # ensure exact order
+    return {k: row_full.get(k) for k in cols}
+
+
 def serve(
     job_title: str,
     state_abbrev: str,
     city: str,
     rating: float,
     age: float,
-    min_size: float,
-    max_size: float,
     sector: str,
     type_of_ownership: str,
-    size_label: str,
+    size_band: str,
     job_description_text: str,
     company_name: str = "",
     use_agent_flag: bool = True,
@@ -488,23 +399,23 @@ def serve(
     # UI update placeholders
     state_ui = gr.update()
     city_ui = gr.update()
-    min_ui = gr.update()
-    max_ui = gr.update()
     age_ui = gr.update()
     sector_ui = gr.update()
     own_ui = gr.update()
-    size_lbl_ui = gr.update()
+    size_band_ui = gr.update()
 
     # --- Company Agent backfill (optional) ---
     web_prof = {}
-    if use_agent_flag and company_name:
+    if use_agent_flag and _agent and company_name:
         try:
-            web_prof = _agent.lookup(company_name) or {}
+            web_raw = _agent.lookup(company_name) or {}
         except Exception:
-            web_prof = {}
+            web_raw = {}
+        web_prof = normalize_company_profile_to_schema(web_raw)
 
         def pick_str(curr, new):
-            if new is None or new == "":
+            new = (new or "").strip()
+            if not new:
                 return curr
             if not curr or str(curr).strip() == "":
                 return new
@@ -523,22 +434,18 @@ def serve(
 
         sector            = pick_str(sector,            web_prof.get("Sector"))
         type_of_ownership = pick_str(type_of_ownership, web_prof.get("Type of ownership"))
-        size_label        = pick_str(size_label,        web_prof.get("Size"))
-        min_size          = pick_num(min_size,          web_prof.get("min_size"))
-        max_size          = pick_num(max_size,          web_prof.get("max_size"))
-        age       = pick_num(age,       web_prof.get("age"))
+        size_band         = pick_str(size_band,         web_prof.get("size_band"))
+        age               = pick_num(age,               web_prof.get("age"))
 
-        if sector:            sector_ui      = gr.update(value=sector)
-        if type_of_ownership: own_ui         = gr.update(value=type_of_ownership)
-        if size_label:        size_lbl_ui    = gr.update(value=size_label)
-        if min_size is not None:   min_ui    = gr.update(value=min_size)
-        if max_size is not None:   max_ui    = gr.update(value=max_size)
-        if age is not None: age_ui = gr.update(value=age)
+        if sector:            sector_ui   = gr.update(value=sector)
+        if type_of_ownership: own_ui      = gr.update(value=type_of_ownership)
+        if size_band:         size_band_ui= gr.update(value=size_band)
+        if age is not None:   age_ui      = gr.update(value=age)
 
     # --- Title (parse if missing) ---
     job_title = (job_title or "").strip()
     if not job_title:
-        parsed_title, _dbg = detect_job_title(job_description_text)
+        parsed_title = detect_job_title(job_description_text)
         if parsed_title:
             job_title = parsed_title
 
@@ -548,19 +455,15 @@ def serve(
             {"error": "Job Title is required. I couldn't parse a title from the JD. "
                       "Please type it (e.g., 'Artificial Intelligence Engineer'). "
                       f"JD preview: {sample}"},
-            state_ui, city_ui, min_ui, max_ui, age_ui, sector_ui, own_ui, size_lbl_ui
+            state_ui, city_ui, age_ui, sector_ui, own_ui, size_band_ui
         )
 
     if looks_like_location(job_title):
         return (
             {"error": "Job Title looks like a location. Please enter a real job title (e.g., 'Senior Data Scientist')."},
-            state_ui, city_ui, min_ui, max_ui, age_ui, sector_ui, own_ui, size_lbl_ui
+            state_ui, city_ui, age_ui, sector_ui, own_ui, size_band_ui
         )
     job_title = titlecase(job_title)
-
-    # Seniority (smart) mapped to 6 buckets
-    smart_seniority, sen_conf, _sen_reasons = detect_seniority(job_title, job_description_text or "")
-    smart_seniority6 = MAP6.get(smart_seniority or "", None)
 
     # --- Location logic ---
     state_abbrev = (state_abbrev or "").strip().upper()
@@ -573,19 +476,19 @@ def serve(
 
     # 1) Try JD parse first
     if not (state_abbrev and state_abbrev in US_STATES and city and _valid_city_state(city, state_abbrev)):
-        jd_loc = _try_parse_location_from_jd(job_description_text)
+        jd_loc = try_parse_location_from_jd(job_description_text)
         if jd_loc:
             city, state_abbrev = jd_loc
             choices = list(STATE_TO_CITIES.get(state_abbrev, []))
             if city not in choices:
-                choices.append(city)  # ensure selectable even if not prelisted
+                choices.append(city)  # ensure selectable
             state_ui = gr.update(value=state_abbrev)
             city_ui = gr.update(value=city, choices=choices)
 
     # 2) If still invalid, try company HQ
-    if not (state_abbrev and state_abbrev in US_STATES and city and _valid_city_state(city, state_abbrev)):
-        hq_city = (web_prof or {}).get("hq_city") or None
-        hq_state = (web_prof or {}).get("hq_state") or None
+    if not (state_abbrev and state_abbrev in US_STATES and city and _valid_city_state(city, state_abbrev)) and web_prof:
+        hq_city = web_prof.get("hq_city") or None
+        hq_state = web_prof.get("hq_state") or None
         if hq_city and hq_state:
             hq_state_norm = hq_state.strip().upper()
             hq_city_norm = titlecase(str(hq_city).strip())
@@ -603,20 +506,20 @@ def serve(
     if state_abbrev not in US_STATES:
         return (
             {"error": "Please select a valid US state or provide a JD with a parsable US location (e.g., 'San Jose, CA')."},
-            state_ui, city_ui, min_ui, max_ui, age_ui, sector_ui, own_ui, size_lbl_ui
+            state_ui, city_ui, age_ui, sector_ui, own_ui, size_band_ui
         )
 
     if auto_loc_from_hq:
         if not city or not CITY_REGEX.match(city):
             return (
                 {"error": f"HQ city '{city}' is invalid. Please provide a valid city name or choose a city for {state_abbrev}."},
-                state_ui, city_ui, min_ui, max_ui, age_ui, sector_ui, own_ui, size_lbl_ui
+                state_ui, city_ui, age_ui, sector_ui, own_ui, size_band_ui
             )
     else:
         if not (city and _valid_city_state(city, state_abbrev)):
             return (
                 {"error": f"Please select a valid City for state {state_abbrev} or provide a JD with a parsable '{city}, {state_abbrev}'."},
-                state_ui, city_ui, min_ui, max_ui, age_ui, sector_ui, own_ui, size_lbl_ui
+                state_ui, city_ui, age_ui, sector_ui, own_ui, size_band_ui
             )
 
     location = f"{city}, {state_abbrev}"
@@ -635,39 +538,26 @@ def serve(
 
     rating, err = _num(rating, "Rating", 0, 5)
     if err:
-        return ({"error": err}, state_ui, city_ui, min_ui, max_ui, age_ui, sector_ui, own_ui, size_lbl_ui)
+        return ({"error": err}, state_ui, city_ui, age_ui, sector_ui, own_ui, size_band_ui)
     age, err = _num(age, "Company Age", 0, 200)
     if err:
-        return ({"error": err}, state_ui, city_ui, min_ui, max_ui, age_ui, sector_ui, own_ui, size_lbl_ui)
-    min_size, err = _num(min_size, "Company Size (min employees)", 1, 1e6)
-    if err:
-        return ({"error": err}, state_ui, city_ui, min_ui, max_ui, age_ui, sector_ui, own_ui, size_lbl_ui)
-    max_size, err = _num(max_size, "Company Size (max employees)", 1, 1e7)
-    if err:
-        return ({"error": err}, state_ui, city_ui, min_ui, max_ui, age_ui, sector_ui, own_ui, size_lbl_ui)
-    if max_size < min_size:
-        return (
-            {"error": "Max company size must be ≥ min company size."},
-            state_ui, city_ui, min_ui, max_ui, age_ui, sector_ui, own_ui, size_lbl_ui
-        )
+        return ({"error": err}, state_ui, city_ui, age_ui, sector_ui, own_ui, size_band_ui)
 
     # --- Assemble model row ---
     sector = (sector or "").strip()
     type_of_ownership = (type_of_ownership or "").strip()
-    size_label = (size_label or "").strip()
+    size_band = size_band if size_band in SIZE_BANDS else ""
 
-    row = {
-        "Job Title": job_title,
-        "Location": location,
-        "Rating": rating,
-        "age": age,
-        "min_size": min_size,
-        "max_size": max_size,
-        "Sector": sector,
-        "Type of ownership": type_of_ownership,
-        "Size": size_label,
-    }
-    X = pd.DataFrame([row], columns=RAW_INPUTS)
+    row = _to_model_row_from_ui(
+        job_title=job_title,
+        location=location,
+        rating=rating,
+        age=age,
+        sector=sector,
+        type_of_ownership=type_of_ownership,
+        size_band=size_band,
+    )
+    X = pd.DataFrame([row], columns=_SCHEMA["raw_inputs"])
 
     # --- Predict & Derived ---
     try:
@@ -676,13 +566,8 @@ def serve(
     except Exception as e:
         return (
             {"error": f"Prediction failed. Check inputs/columns. Details: {e}"},
-            state_ui, city_ui, min_ui, max_ui, age_ui, sector_ui, own_ui, size_lbl_ui
+            state_ui, city_ui, age_ui, sector_ui, own_ui, size_band_ui
         )
-
-    # Use smart seniority if confident; map to 6 buckets
-    if smart_seniority6 and sen_conf >= 0.65:
-        derived["seniority"] = smart_seniority6
-        derived["seniority_conf"] = round(sen_conf, 2)
 
     explanation = llm_explain(row, derived, point, low, high)
 
@@ -694,11 +579,11 @@ def serve(
             "Explanation": explanation,
             "Inputs used by the model": row,
         },
-        state_ui, city_ui, min_ui, max_ui, age_ui, sector_ui, own_ui, size_lbl_ui
+        state_ui, city_ui, age_ui, sector_ui, own_ui, size_band_ui
     )
 
 
-# ====================== UI ======================
+# ---------------- UI ----------------
 def update_city_choices(state_code: str):
     cities = STATE_TO_CITIES.get(state_code, [])
     return gr.update(choices=cities)
@@ -706,8 +591,9 @@ def update_city_choices(state_code: str):
 with gr.Blocks(title="Salary Prediction Chatbot") as demo:
     gr.Markdown(
         "# 📈 Salary Prediction Chatbot (US-only)\n"
-        "- Leave Job Title/Location blank and paste a JD: I'll try to parse them.\n"
-        "- If Location is missing, I'll auto-fill from the company HQ when possible."
+        "- Paste a JD and leave Job Title/Location blank: I'll try to parse them.\n"
+        "- If Location is missing, I'll auto-fill from the company HQ when possible.\n"
+        "- **Model schema**: Rating, age, Sector, Type of ownership, size_band, Job Title, Location."
     )
 
     with gr.Tabs():
@@ -717,21 +603,16 @@ with gr.Blocks(title="Salary Prediction Chatbot") as demo:
 
             with gr.Row():
                 state = gr.Dropdown(choices=US_STATES, value=None, label="State (US)")
-                init_cities = STATE_TO_CITIES.get(None, [])
-                city = gr.Dropdown(choices=init_cities, value=None, label="City")
+                city = gr.Dropdown(choices=[], value=None, label="City")
 
             with gr.Row():
                 rating = gr.Number(label="Rating (0-5)", value=3.5, precision=2)
                 age = gr.Number(label="Company Age (years)", value=None, precision=1)
 
             with gr.Row():
-                min_size = gr.Number(label="Company Size (min employees)", value=None, precision=0)
-                max_size = gr.Number(label="Company Size (max employees)", value=None, precision=0)
-
-            with gr.Row():
-                sector = gr.Textbox(label="Sector", placeholder="e.g., Information Technology")
-                type_own = gr.Textbox(label="Type of ownership", placeholder="e.g., Company - Private")
-                size_lbl = gr.Textbox(label="Size (label)", placeholder="e.g., Mid")
+                sector = gr.Textbox(label="Sector", placeholder="e.g., Information Technology / Media / Finance ...")
+                type_own = gr.Textbox(label="Type of ownership", placeholder="e.g., Company - Private / Company - Public")
+                size_band = gr.Dropdown(label="Size band", choices=SIZE_BANDS, value=None)
 
             with gr.Row():
                 company_input = gr.Textbox(label="Company (optional)", placeholder="e.g., Databricks")
@@ -739,8 +620,11 @@ with gr.Blocks(title="Salary Prediction Chatbot") as demo:
                 overwrite_defaults = gr.Checkbox(label="Overwrite default values with agent data", value=True)
 
             gr.Markdown("### Optional: Paste Job Description (for autofill)")
-            jd_text = gr.Textbox(label="Job Description", lines=8,
-                                 placeholder="Paste the JD here; I'll try to extract job title and location like 'City, ST'.")
+            jd_text = gr.Textbox(
+                label="Job Description",
+                lines=8,
+                placeholder="Paste the JD here; I'll try to extract job title and location like 'City, ST'."
+            )
 
             state.change(fn=update_city_choices, inputs=state, outputs=city, queue=False)
 
@@ -749,10 +633,10 @@ with gr.Blocks(title="Salary Prediction Chatbot") as demo:
 
             go.click(
                 fn=serve,
-                inputs=[job_title, state, city, rating, age, min_size, max_size,
-                        sector, type_own, size_lbl, jd_text, company_input, use_agent, overwrite_defaults],
-                outputs=[out, state, city, min_size, max_size, age, sector, type_own, size_lbl]
+                inputs=[job_title, state, city, rating, age, sector, type_own, size_band, jd_text, company_input, use_agent, overwrite_defaults],
+                outputs=[out, state, city, age, sector, type_own, size_band]
             )
 
 if __name__ == "__main__":
+    # 需要公网分享可在 demo.launch(share=True)
     demo.launch()

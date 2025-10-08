@@ -1,90 +1,127 @@
 # tests/test_seniority.py
 import pytest
+import sys
+from pathlib import Path
 
-# Import from your app module. Adjust the path/module name if needed.
-from app import detect_seniority, MAP6
+# Add project root to Python path
+project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(project_root))
 
-def norm6(bucket: str) -> str:
-    """Map the detector's rich bucket to the 6 standard buckets."""
-    return MAP6.get(bucket, bucket)
+from utils.featurizers import extract_seniority, SeniorityAdder
 
-@pytest.mark.parametrize(
-    "title,jd,expected",
-    [
-        # --- Intern / Entry ---
-        ("Software Engineer Intern", "", "intern"),
-        ("Data Analyst (Internship)", "", "intern"),
-        ("Software Engineer (Entry-Level)", "", "entry"),
-        ("Junior Data Engineer", "", "entry"),
-        ("Associate Machine Learning Engineer", "", "entry"),
-        ("New Grad Software Engineer", "", "entry"),
+class TestExtractSeniority:
+    """Test the extract_seniority function"""
+    
+    @pytest.mark.parametrize("title,expected", [
+        # Intern cases
+        ("Software Engineer Intern", "intern"),
+        ("Data Analyst (Internship)", "intern"),
+        ("ML Engineer Co-op", "intern"),
+        ("Software Engineer Co Op", "intern"),
+        
+        # Junior/Entry cases
+        ("Junior Software Engineer", "junior"),
+        ("Jr. Data Scientist", "junior"),
+        ("Entry Level Software Engineer", "entry"),
+        ("Entry-Level ML Engineer", "entry"),
+        ("Associate Data Engineer", "entry"),
+        
+        # Numeric levels
+        ("Software Engineer I", "mid"),
+        ("Software Engineer II", "senior"),
+        ("Software Engineer III", "senior"),
+        ("Software Engineer IV", "senior"),
+        ("Software Engineer V", "senior"),
+        ("Backend Engineer L1", "mid"),
+        ("Backend Engineer L2", "senior"),
+        ("Backend Engineer L3", "senior"),
+        
+        # Senior cases
+        ("Senior Software Engineer", "senior"),
+        ("Sr. Data Scientist", "senior"),
+        
+        # Staff cases
+        ("Staff Software Engineer", "staff"),
+        
+        # Principal cases
+        ("Principal Engineer", "principal"),
+        
+        # Lead cases
+        ("Lead Software Engineer", "lead"),
+        ("Tech Lead", "lead"),
+        
+        # Management cases
+        ("Engineering Manager", "manager"),
+        ("Mgr. Data Science", "manager"),
+        ("Head of Engineering", "manager"),
+        ("Director of Engineering", "director"),
+        ("Dir. of ML", "director"),
+        
+        # VP cases
+        ("VP of Engineering", "vp"),
+        ("SVP of Data", "vp"),
+        ("AVP of AI", "vp"),
+        
+        # C-level cases
+        ("CEO", "cxo"),
+        ("CTO", "cxo"),
+        ("CFO", "cxo"),
+        ("Chief Data Officer", "cxo"),
+        
+        # Default case
+        ("Software Engineer", "mid"),
+        ("Data Scientist", "mid"),
+    ])
+    def test_extract_seniority(self, title, expected):
+        """Test seniority extraction from job titles"""
+        result = extract_seniority(title)
+        assert result == expected, f"Expected {expected} for '{title}', got {result}"
 
-        # --- Numeric / Roman levels ---
-        ("Software Engineer II", "", "entry"),        # II -> junior -> entry
-        ("SDE III", "", "entry"),                     # III -> mid -> entry
-        ("Backend Engineer L4", "", "senior"),        # L4 -> senior
-        ("ML Engineer L5", "", "staff"),              # L5 -> staff
-        ("Senior Software Engineer L6", "", "staff"), # L6 -> principal -> staff
-
-        # --- Senior / Staff / Principal / Lead ---
-        ("Senior Data Scientist", "", "senior"),
-        ("Staff Software Engineer", "", "staff"),
-        ("Principal Engineer, Platforms", "", "staff"),
-        ("Lead Backend Engineer", "", "staff"),
-
-        # --- Management / Leadership ---
-        ("Engineering Manager", "", "manager"),
-        ("Director of Data Science", "", "manager"),
-        ("Head of Machine Learning", "", "manager"),  # head of -> director -> manager
-        ("VP of Engineering", "", "vp"),
-        ("Chief Technology Officer (CTO)", "", "vp"),  # cxo -> vp
-
-        # --- From JD body (years of exp) ---
-        ("Software Engineer", "We need 6+ years of experience building systems.", "senior"),
-        ("Software Engineer", "At least 8 years experience in distributed systems.", "staff"),
-        ("Software Engineer", "0-1 years of experience welcome.", "entry"),
-
-        # --- Default when no cues (falls back to 'mid' -> entry) ---
-        ("Software Engineer", "", "entry"),
-    ]
-)
-def test_detect_seniority_map6(title, jd, expected):
-    bucket, conf, reasons = detect_seniority(title, jd)
-    got6 = norm6(bucket or "")
-    assert got6 == expected, f"title='{title}', jd='{jd[:60]}...', raw='{bucket}', conf={conf}, reasons={reasons}"
-
-def test_confidence_nonzero_when_signals_present():
-    bucket, conf, _ = detect_seniority("Senior Staff Software Engineer L6", "")
-    assert conf > 0.5
-    assert norm6(bucket) == "staff"
-
-def test_confidence_low_when_default_mid():
-    bucket, conf, _ = detect_seniority("Software Engineer", "")
-    # default path returns 'mid' with ~0.45 in current implementation
-    assert norm6(bucket) == "entry"
-    assert 0.3 <= conf <= 0.5
-
-@pytest.mark.parametrize(
-    "title,jd,prefer_lower",
-    [
-        # If both entry & senior appear, tie-break should bias to lower level
-        ("Entry-Level Senior Software Engineer", "", "entry"),
-        ("Junior Senior Data Analyst", "", "entry"),
-    ]
-)
-def test_tiebreak_biases_to_lower_level(title, jd, prefer_lower):
-    bucket, conf, reasons = detect_seniority(title, jd)
-    assert norm6(bucket) == prefer_lower, f"reasons={reasons}"
-
-@pytest.mark.parametrize(
-    "title,jd,expected",
-    [
-        # Managerial tokens should override IC tokens if both appear
-        ("Senior Engineering Manager", "", "manager"),
-        ("Staff Director of Engineering", "", "manager"),
-        ("Lead VP of Product Engineering", "", "vp"),
-    ]
-)
-def test_managerial_override(title, jd, expected):
-    bucket, conf, reasons = detect_seniority(title, jd)
-    assert norm6(bucket) == expected, f"reasons={reasons}"
+class TestSeniorityAdder:
+    """Test the SeniorityAdder transformer"""
+    
+    def test_seniority_adder_fit_transform(self):
+        """Test that SeniorityAdder correctly adds seniority column"""
+        import pandas as pd
+        
+        # Create test data
+        data = {
+            "Job Title": [
+                "Software Engineer Intern",
+                "Senior Software Engineer", 
+                "Engineering Manager",
+                "Data Scientist"
+            ],
+            "Location": ["San Francisco, CA", "New York, NY", "Seattle, WA", "Austin, TX"]
+        }
+        df = pd.DataFrame(data)
+        
+        # Test the transformer
+        adder = SeniorityAdder(title_col="Job Title")
+        result = adder.fit_transform(df)
+        
+        # Check that seniority column was added
+        assert "seniority" in result.columns
+        assert result["seniority"].tolist() == ["intern", "senior", "manager", "mid"]
+        
+    def test_seniority_adder_custom_column(self):
+        """Test SeniorityAdder with custom title column name"""
+        import pandas as pd
+        
+        data = {
+            "Position": ["Junior Developer", "Staff Engineer"],
+            "Location": ["SF", "NYC"]
+        }
+        df = pd.DataFrame(data)
+        
+        adder = SeniorityAdder(title_col="Position")
+        result = adder.fit_transform(df)
+        
+        assert "seniority" in result.columns
+        assert result["seniority"].tolist() == ["junior", "staff"]
+        
+    def test_seniority_adder_fit_returns_self(self):
+        """Test that fit method returns self"""
+        adder = SeniorityAdder()
+        result = adder.fit(None)
+        assert result is adder

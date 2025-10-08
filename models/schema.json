@@ -1,0 +1,24 @@
+{
+  "raw_inputs": [
+    "Rating",
+    "age",
+    "Sector",
+    "Type of ownership",
+    "size_band",
+    "Job Title",
+    "Location"
+  ],
+  "numeric": [
+    "Rating",
+    "age"
+  ],
+  "categorical_base": [
+    "Sector",
+    "Type of ownership",
+    "size_band"
+  ],
+  "added_by_featurizers": [
+    "seniority",
+    "loc_tier"
+  ]
+}
