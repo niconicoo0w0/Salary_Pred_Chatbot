@@ -44,7 +44,7 @@ def main(csv_path: str, out_path: str = "models/pipeline.pkl"):
     df = df.dropna(subset=["avg_salary"]).copy()
 
     # Ensure numeric columns exist
-    numeric = ["Rating", "company_age", "min_size", "max_size"]
+    numeric = ["Rating", "age", "min_size", "max_size"]
     for col in numeric:
         if col not in df.columns:
             df[col] = np.nan

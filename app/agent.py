@@ -27,7 +27,7 @@ class CompanyAgent:
             "Size":               prof.get("size_label"),
             "min_size":           prof.get("min_size"),
             "max_size":           prof.get("max_size"),
-            "company_age":        compute_age(prof.get("founded")) if prof.get("founded") else None,
+            "age":        compute_age(prof.get("founded")) if prof.get("founded") else None,
             "hq_city":            prof.get("hq_city"),
             "hq_state":           prof.get("hq_state"),
             "__sources__":        [s.model_dump() for s in sources],

@@ -19,7 +19,7 @@ from utils.helpers import (
     titlecase, looks_like_location, clean_text, strip_paren_noise,
     looks_like_noise_line, fmt_none
 )
-from utils.jd_parsing import CITY_REGEX
+from utils.jd_parsing import CITY_REGEX, parse_jd
 
 # ---- Optional LLM client ----
 try:
@@ -32,7 +32,6 @@ except Exception:
 
 # ---- Pipeline and custom transformers (needed for unpickling) ----
 import featurizers   # noqa: F401
-import jd_parser     # used for JD parse of location/title if needed
 
 # ---- Company agent (optional enrichment) ----
 from agent import CompanyAgent
@@ -392,7 +391,7 @@ def _try_parse_location_from_jd(jd_text: str) -> Optional[Tuple[str, str]]:
     if not jd_text or not jd_text.strip():
         return None
     try:
-        parsed = jd_parser.parse_jd(jd_text)
+        parsed = parse_jd(jd_text)
     except Exception:
         return None
     loc = (parsed or {}).get("location") or ""
@@ -414,7 +413,7 @@ def llm_explain(context: Dict[str, Any], derived: Dict[str, Any], point: float, 
             "Inputs used by the model:",
             f"- Job title: {fmt_none(context.get('Job Title'))}",
             f"- Location: {fmt_none(context.get('Location'))}",
-            f"- Rating: {fmt_none(context.get('Rating'))}, Company age: {fmt_none(context.get('company_age'))}",
+            f"- Rating: {fmt_none(context.get('Rating'))}, Company age: {fmt_none(context.get('age'))}",
             f"- Company size (min-max): {fmt_none(context.get('min_size'))}-{fmt_none(context.get('max_size'))}",
             f"- Sector: {fmt_none(context.get('Sector'))}, Ownership: {fmt_none(context.get('Type of ownership'))}, Size label: {fmt_none(context.get('Size'))}",
             "Derived (from pipeline):",
@@ -430,14 +429,14 @@ You are a careful compensation assistant.
 RULES
 - ≤ 110 words. No invented numbers.
 - Only reference training inputs and derived features:
-  Inputs: Job Title, Location, Rating, company_age, min_size, max_size, Sector, Type of ownership, Size.
+  Inputs: Job Title, Location, Rating, age, min_size, max_size, Sector, Type of ownership, Size.
   Derived: seniority (from title), loc_tier (from location).
 - Mention 2-3 likely drivers tied to these. Neutral tone.
 
 INPUTS
 - Job title: {context.get('Job Title','—')}
 - Location: {context.get('Location','—')}
-- Rating: {context.get('Rating','—')}, Company age: {context.get('company_age','—')}
+- Rating: {context.get('Rating','—')}, Company age: {context.get('age','—')}
 - Company size (min-max): {context.get('min_size','—')}-{context.get('max_size','—')}
 - Sector: {context.get('Sector','—')}, Ownership: {context.get('Type of ownership','—')}, Size label: {context.get('Size','—')}
 
@@ -475,7 +474,7 @@ def serve(
     state_abbrev: str,
     city: str,
     rating: float,
-    company_age: float,
+    age: float,
     min_size: float,
     max_size: float,
     sector: str,
@@ -491,7 +490,7 @@ def serve(
     city_ui = gr.update()
     min_ui = gr.update()
     max_ui = gr.update()
-    company_age_ui = gr.update()
+    age_ui = gr.update()
     sector_ui = gr.update()
     own_ui = gr.update()
     size_lbl_ui = gr.update()
@@ -527,14 +526,14 @@ def serve(
         size_label        = pick_str(size_label,        web_prof.get("Size"))
         min_size          = pick_num(min_size,          web_prof.get("min_size"))
         max_size          = pick_num(max_size,          web_prof.get("max_size"))
-        company_age       = pick_num(company_age,       web_prof.get("company_age"))
+        age       = pick_num(age,       web_prof.get("age"))
 
         if sector:            sector_ui      = gr.update(value=sector)
         if type_of_ownership: own_ui         = gr.update(value=type_of_ownership)
         if size_label:        size_lbl_ui    = gr.update(value=size_label)
         if min_size is not None:   min_ui    = gr.update(value=min_size)
         if max_size is not None:   max_ui    = gr.update(value=max_size)
-        if company_age is not None: company_age_ui = gr.update(value=company_age)
+        if age is not None: age_ui = gr.update(value=age)
 
     # --- Title (parse if missing) ---
     job_title = (job_title or "").strip()
@@ -549,13 +548,13 @@ def serve(
             {"error": "Job Title is required. I couldn't parse a title from the JD. "
                       "Please type it (e.g., 'Artificial Intelligence Engineer'). "
                       f"JD preview: {sample}"},
-            state_ui, city_ui, min_ui, max_ui, company_age_ui, sector_ui, own_ui, size_lbl_ui
+            state_ui, city_ui, min_ui, max_ui, age_ui, sector_ui, own_ui, size_lbl_ui
         )
 
     if looks_like_location(job_title):
         return (
             {"error": "Job Title looks like a location. Please enter a real job title (e.g., 'Senior Data Scientist')."},
-            state_ui, city_ui, min_ui, max_ui, company_age_ui, sector_ui, own_ui, size_lbl_ui
+            state_ui, city_ui, min_ui, max_ui, age_ui, sector_ui, own_ui, size_lbl_ui
         )
     job_title = titlecase(job_title)
 
@@ -604,20 +603,20 @@ def serve(
     if state_abbrev not in US_STATES:
         return (
             {"error": "Please select a valid US state or provide a JD with a parsable US location (e.g., 'San Jose, CA')."},
-            state_ui, city_ui, min_ui, max_ui, company_age_ui, sector_ui, own_ui, size_lbl_ui
+            state_ui, city_ui, min_ui, max_ui, age_ui, sector_ui, own_ui, size_lbl_ui
         )
 
     if auto_loc_from_hq:
         if not city or not CITY_REGEX.match(city):
             return (
                 {"error": f"HQ city '{city}' is invalid. Please provide a valid city name or choose a city for {state_abbrev}."},
-                state_ui, city_ui, min_ui, max_ui, company_age_ui, sector_ui, own_ui, size_lbl_ui
+                state_ui, city_ui, min_ui, max_ui, age_ui, sector_ui, own_ui, size_lbl_ui
             )
     else:
         if not (city and _valid_city_state(city, state_abbrev)):
             return (
                 {"error": f"Please select a valid City for state {state_abbrev} or provide a JD with a parsable '{city}, {state_abbrev}'."},
-                state_ui, city_ui, min_ui, max_ui, company_age_ui, sector_ui, own_ui, size_lbl_ui
+                state_ui, city_ui, min_ui, max_ui, age_ui, sector_ui, own_ui, size_lbl_ui
             )
 
     location = f"{city}, {state_abbrev}"
@@ -636,20 +635,20 @@ def serve(
 
     rating, err = _num(rating, "Rating", 0, 5)
     if err:
-        return ({"error": err}, state_ui, city_ui, min_ui, max_ui, company_age_ui, sector_ui, own_ui, size_lbl_ui)
-    company_age, err = _num(company_age, "Company Age", 0, 200)
+        return ({"error": err}, state_ui, city_ui, min_ui, max_ui, age_ui, sector_ui, own_ui, size_lbl_ui)
+    age, err = _num(age, "Company Age", 0, 200)
     if err:
-        return ({"error": err}, state_ui, city_ui, min_ui, max_ui, company_age_ui, sector_ui, own_ui, size_lbl_ui)
+        return ({"error": err}, state_ui, city_ui, min_ui, max_ui, age_ui, sector_ui, own_ui, size_lbl_ui)
     min_size, err = _num(min_size, "Company Size (min employees)", 1, 1e6)
     if err:
-        return ({"error": err}, state_ui, city_ui, min_ui, max_ui, company_age_ui, sector_ui, own_ui, size_lbl_ui)
+        return ({"error": err}, state_ui, city_ui, min_ui, max_ui, age_ui, sector_ui, own_ui, size_lbl_ui)
     max_size, err = _num(max_size, "Company Size (max employees)", 1, 1e7)
     if err:
-        return ({"error": err}, state_ui, city_ui, min_ui, max_ui, company_age_ui, sector_ui, own_ui, size_lbl_ui)
+        return ({"error": err}, state_ui, city_ui, min_ui, max_ui, age_ui, sector_ui, own_ui, size_lbl_ui)
     if max_size < min_size:
         return (
             {"error": "Max company size must be ≥ min company size."},
-            state_ui, city_ui, min_ui, max_ui, company_age_ui, sector_ui, own_ui, size_lbl_ui
+            state_ui, city_ui, min_ui, max_ui, age_ui, sector_ui, own_ui, size_lbl_ui
         )
 
     # --- Assemble model row ---
@@ -661,7 +660,7 @@ def serve(
         "Job Title": job_title,
         "Location": location,
         "Rating": rating,
-        "company_age": company_age,
+        "age": age,
         "min_size": min_size,
         "max_size": max_size,
         "Sector": sector,
@@ -677,7 +676,7 @@ def serve(
     except Exception as e:
         return (
             {"error": f"Prediction failed. Check inputs/columns. Details: {e}"},
-            state_ui, city_ui, min_ui, max_ui, company_age_ui, sector_ui, own_ui, size_lbl_ui
+            state_ui, city_ui, min_ui, max_ui, age_ui, sector_ui, own_ui, size_lbl_ui
         )
 
     # Use smart seniority if confident; map to 6 buckets
@@ -695,7 +694,7 @@ def serve(
             "Explanation": explanation,
             "Inputs used by the model": row,
         },
-        state_ui, city_ui, min_ui, max_ui, company_age_ui, sector_ui, own_ui, size_lbl_ui
+        state_ui, city_ui, min_ui, max_ui, age_ui, sector_ui, own_ui, size_lbl_ui
     )
 
 
@@ -723,7 +722,7 @@ with gr.Blocks(title="Salary Prediction Chatbot") as demo:
 
             with gr.Row():
                 rating = gr.Number(label="Rating (0-5)", value=3.5, precision=2)
-                company_age = gr.Number(label="Company Age (years)", value=None, precision=1)
+                age = gr.Number(label="Company Age (years)", value=None, precision=1)
 
             with gr.Row():
                 min_size = gr.Number(label="Company Size (min employees)", value=None, precision=0)
@@ -750,9 +749,9 @@ with gr.Blocks(title="Salary Prediction Chatbot") as demo:
 
             go.click(
                 fn=serve,
-                inputs=[job_title, state, city, rating, company_age, min_size, max_size,
+                inputs=[job_title, state, city, rating, age, min_size, max_size,
                         sector, type_own, size_lbl, jd_text, company_input, use_agent, overwrite_defaults],
-                outputs=[out, state, city, min_size, max_size, company_age, sector, type_own, size_lbl]
+                outputs=[out, state, city, min_size, max_size, age, sector, type_own, size_lbl]
             )
 
 if __name__ == "__main__":

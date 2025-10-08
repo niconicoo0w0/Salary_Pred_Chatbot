@@ -18,6 +18,7 @@ try:
 except Exception:
     HAVE_DDG = False
 
+from utils.jd_parsing import _SECTOR_MAP, _TRAIN_SECTORS
 
 # ---------- HTTP basics ----------
 UA_POOL = [
@@ -294,48 +295,68 @@ def _normalize_hq(s: str) -> Tuple[Optional[str], Optional[str]]:
     # no US state, return the last "like city" part
     return (parts[-1] if parts else None, None)
 
-# TODO, need to be extended
-_SECTOR_MAP = {
-    # normalize based on infobox "industry" field (can be extended)
-    "cloud computing":"Information Technology",
-    "data warehousing":"Information Technology",
-    "data analytics":"Information Technology",
-    "software":"Software",
-    "application software":"Software",
-    "computer software":"Software",
-    "information technology":"Information Technology",
-    "consumer electronics":"Information Technology",
-    "social media":"Information Technology",
-    "internet":"Information Technology",
-    "e-commerce":"Retail",
-    "retail":"Retail",
-    "transportation":"Transportation",
-    "ride-hailing":"Transportation",
-    "food delivery":"Delivery",
-    "delivery":"Delivery",
-    "entertainment":"Entertainment & Media",
-    "media":"Entertainment & Media",
-    "semiconductor":"Semiconductors",
-    "semiconductors":"Semiconductors",
-    "financial technology":"Information Technology",
-    "payment processing":"Information Technology",
-    # extend: Stripe/Snowflake/Airbnb etc. common expressions"
-    "fintech":"Information Technology",
-    "payments":"Information Technology",
-    "data cloud":"Information Technology",
-    "cloud data":"Information Technology",
-    "online marketplace":"Information Technology",
-    "travel":"Transportation"
-}
+# _SECTOR_MAP = {
+#     # normalize based on infobox "industry" field (can be extended)
+#     "cloud computing":"Information Technology",
+#     "data warehousing":"Information Technology",
+#     "data analytics":"Information Technology",
+#     "software":"Software",
+#     "application software":"Software",
+#     "computer software":"Software",
+#     "information technology":"Information Technology",
+#     "consumer electronics":"Information Technology",
+#     "social media":"Information Technology",
+#     "internet":"Information Technology",
+#     "e-commerce":"Retail",
+#     "retail":"Retail",
+#     "transportation":"Transportation",
+#     "ride-hailing":"Transportation",
+#     "food delivery":"Delivery",
+#     "delivery":"Delivery",
+#     "entertainment":"Entertainment & Media",
+#     "media":"Entertainment & Media",
+#     "semiconductor":"Semiconductors",
+#     "semiconductors":"Semiconductors",
+#     "financial technology":"Information Technology",
+#     "payment processing":"Information Technology",
+#     # extend: Stripe/Snowflake/Airbnb etc. common expressions"
+#     "fintech":"Information Technology",
+#     "payments":"Information Technology",
+#     "data cloud":"Information Technology",
+#     "cloud data":"Information Technology",
+#     "online marketplace":"Information Technology",
+#     "travel":"Transportation"
+# }
 
-def _normalize_sector(industry_text: str) -> Optional[str]:
+def _align_sector_to_training(sector: Optional[str]) -> str:
+    """
+    Ensure the sector string is one of the TRAIN labels.
+    If not, try mild normalization (& -> 'and'); if still not, return '' (ignored by OHE).
+    """
+    if not sector or not isinstance(sector, str):
+        return ""
+    s = sector.strip()
+    if s in _TRAIN_SECTORS:
+        return s
+    s2 = s.replace("&", "and")
+    if s2 in _TRAIN_SECTORS:
+        return s2
+    return ""  # safe fallback
+
+def _normalize_sector(industry_text: str) -> str:
+    """
+    1) Scan industry text for keyword hits (case-insensitive, first match wins).
+    2) Map to TRAIN sector and hard-validate via _align_sector_to_training().
+    3) If nothing hits, return '' (ignored downstream).
+    """
     if not industry_text:
-        return None
+        return ""
     t = industry_text.lower()
-    for k, v in _SECTOR_MAP.items():
-        if k in t:
-            return v
-    return None
+    for kw, train_label in _SECTOR_MAP.items():
+        if kw in t:
+            return _align_sector_to_training(train_label)
+    return ""
+
 
 _EMP_RES = [
     re.compile(r"\bNumber of employees\s*[:\-]?\s*([\d,\.]+(?:\s*(?:million|thousand|k|m))?)", re.I),
