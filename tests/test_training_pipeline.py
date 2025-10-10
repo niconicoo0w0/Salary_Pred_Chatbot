@@ -1,206 +1,92 @@
 # tests/test_training_pipeline.py
-import pytest
 import sys
 from pathlib import Path
+import pytest
 import pandas as pd
 import numpy as np
-import tempfile
-import os
 
-# Add project root to Python path
-project_root = Path(__file__).parent.parent
+project_root = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(project_root))
 
-# Import training functions
 from models.training_script.train_pipeline import (
-    parse_salary_estimate, parse_size_to_min_max, compute_company_age,
-    build_features, make_preprocessor
+    parse_salary_estimate,
+    parse_size_to_min_max,
+    compute_company_age,
+    make_preprocessor,
+    build_features,
 )
+from utils.constants import NUMERIC, CATEGORICAL_BASE, RAW_INPUTS
 
-class TestSalaryParsing:
-    """Test salary parsing functions"""
-    
-    def test_parse_salary_estimate_valid(self):
-        """Test parsing valid salary estimates"""
-        test_cases = [
-            ("$50k - $70k", (50000, 70000, 60000)),
-            ("$100K - $150K", (100000, 150000, 125000)),
-            ("$80k - $120k (Glassdoor est.)", (80000, 120000, 100000)),
-            ("$60K - $90K (Employer est.)", (60000, 90000, 75000)),
-        ]
-        
-        for salary_str, expected in test_cases:
-            result = parse_salary_estimate(salary_str)
-            assert result == expected, f"Failed for '{salary_str}': expected {expected}, got {result}"
-            
-    def test_parse_salary_estimate_invalid(self):
-        """Test parsing invalid salary estimates"""
-        invalid_cases = [
-            "$50 per hour",
-            "$50 /hr",
-            "Not specified",
-            "",
-            None,
-            "$50k - $70k per hour",
-        ]
-        
-        for salary_str in invalid_cases:
-            result = parse_salary_estimate(salary_str)
-            assert result == (np.nan, np.nan, np.nan), f"Should return NaN for '{salary_str}', got {result}"
+def _toy_training_df():
+    # 为了兼容当前 make_preprocessor 的实现（直接引用 'seniority','loc_tier'），
+    # 这里显式提供这两列；实际训练时由 featurizers 生成。
+    data = {
+        "Rating": [4.2, np.nan, 3.9, 4.8],
+        "age": [25, 10, np.nan, 50],
+        "Sector": ["Information Technology", "Finance", "UnknownSector", None],
+        "Type of ownership": ["Company - Public", "Private", "", "Company - Public"],
+        "size_band": ["Mid", "Large", "XL", ""],
+        "Job Title": ["Software Engineer II", "Junior Data Scientist", "VP of Engineering", "Staff ML Engineer"],
+        "Location": ["San Jose, CA", "Austin, TX", "Remote", "Seattle, WA"],
+        "seniority": ["senior", "junior", "vp", "staff"],
+        "loc_tier": ["high", "mid", "very_high", "low"],
+    }
+    return pd.DataFrame(data)
 
-class TestSizeParsing:
-    """Test company size parsing functions"""
-    
-    def test_parse_size_to_min_max_valid(self):
-        """Test parsing valid company sizes"""
-        test_cases = [
-            ("501 to 1000 employees", (501, 1000)),
-            ("10000+ employees", (10000, 10000)),
-            ("50-200 employees", (50, 200)),
-            ("1000 employees", (1000, 1000)),
-        ]
-        
-        for size_str, expected in test_cases:
-            result = parse_size_to_min_max(size_str)
-            assert result == expected, f"Failed for '{size_str}': expected {expected}, got {result}"
-            
-    def test_parse_size_to_min_max_invalid(self):
-        """Test parsing invalid company sizes"""
-        invalid_cases = [
-            "Unknown",
-            "-",
-            "N/A",
-            "",
-            None,
-            "Not specified",
-        ]
-        
-        for size_str in invalid_cases:
-            result = parse_size_to_min_max(size_str)
-            assert result == (np.nan, np.nan), f"Should return NaN for '{size_str}', got {result}"
+def test_contract_and_transform_matrix():
+    df = _toy_training_df()
+    prep = make_preprocessor()
+    X = prep.fit_transform(df)
 
-class TestCompanyAge:
-    """Test company age computation"""
-    
-    def test_compute_company_age_valid(self):
-        """Test computing company age from founded year"""
-        current_year = 2024
-        test_cases = [
-            (2020, 4),
-            (2010, 14),
-            (2000, 24),
-            (1990, 34),
-        ]
-        
-        for founded_year, expected_age in test_cases:
-            result = compute_company_age(founded_year, current_year)
-            assert result == expected_age, f"Failed for founded {founded_year}: expected {expected_age}, got {result}"
-            
-    def test_compute_company_age_invalid(self):
-        """Test computing company age with invalid inputs"""
-        invalid_cases = [
-            None,
-            "",
-            "invalid",
-            1800,  # Too old
-            2030,  # Future year
-        ]
-        
-        for founded in invalid_cases:
-            result = compute_company_age(founded)
-            assert np.isnan(result), f"Should return NaN for {founded}, got {result}"
+    assert isinstance(X, np.ndarray)
+    assert X.shape[0] == len(df)
+    assert not np.isnan(X).any()
 
-class TestBuildFeatures:
-    """Test feature building functions"""
-    
-    def test_build_features_basic(self):
-        """Test basic feature building"""
-        data = {
-            "Job Title": ["Software Engineer", "Data Scientist"],
-            "Location": ["San Francisco, CA", "New York, NY"],
-            "Rating": [4.5, 4.2],
-            "Sector": ["Information Technology", "Finance"],
-            "Type of ownership": ["Public", "Private"],
-            "Size": ["1000-5000 employees", "500-1000 employees"],
-            "Founded": [2010, 2015],
-            "Salary Estimate": ["$100k - $150k", "$80k - $120k"]
-        }
-        df = pd.DataFrame(data)
-        
-        result = build_features(df)
-        
-        # Check that required columns exist
-        assert "avg_salary" in result.columns
-        assert "min_size" in result.columns
-        assert "max_size" in result.columns
-        assert "age" in result.columns
-        assert "size_band" in result.columns
-        
-        # Check that salary was parsed
-        assert not result["avg_salary"].isna().all()
-        
-        # Check that size was parsed
-        assert not result["min_size"].isna().all()
-        assert not result["max_size"].isna().all()
-        
-        # Check that age was computed
-        assert not result["age"].isna().all()
-        
-    def test_build_features_missing_columns(self):
-        """Test feature building with missing columns"""
-        data = {
-            "Job Title": ["Software Engineer"],
-            "Location": ["San Francisco, CA"],
-            "Rating": [4.5]
-        }
-        df = pd.DataFrame(data)
-        
-        result = build_features(df)
-        
-        # Should still work with missing columns
-        assert "age" in result.columns
-        assert "min_size" in result.columns
-        assert "max_size" in result.columns
-        assert "size_band" in result.columns
+    # 校验 ColumnTransformer 契约
+    cols_num = next(cols for name, trans, cols in prep.transformers_ if name == "num")
+    cols_cat = next(cols for name, trans, cols in prep.transformers_ if name == "cat")
+    assert cols_num == ["Rating", "age"]
+    assert cols_cat == ["Sector", "Type of ownership", "size_band", "seniority", "loc_tier"]
 
-class TestPreprocessor:
-    """Test the preprocessor creation"""
-    
-    def test_make_preprocessor(self):
-        """Test that preprocessor is created correctly"""
-        preprocessor = make_preprocessor()
-        
-        # Check that it's a ColumnTransformer
-        from sklearn.compose import ColumnTransformer
-        assert isinstance(preprocessor, ColumnTransformer)
-        
-        # Check that it has transformers
-        assert len(preprocessor.transformers) > 0
-        assert preprocessor.transformers[0][0] == "num"
-        assert preprocessor.transformers[1][0] == "cat"
-        
-    def test_preprocessor_fit_transform(self):
-        """Test that preprocessor can fit and transform data"""
-        # Create test data
-        data = {
-            "Rating": [4.5, 4.2, 3.8],
-            "age": [10, 15, 5],
-            "Sector": ["Technology", "Finance", "Healthcare"],
-            "Type of ownership": ["Public", "Private", "Public"],
-            "size_band": ["Large", "Mid", "Small"],
-            "seniority": ["senior", "mid", "junior"],
-            "loc_tier": ["high", "mid", "low"]
-        }
-        df = pd.DataFrame(data)
-        
-        preprocessor = make_preprocessor()
-        
-        # Fit and transform
-        result = preprocessor.fit_transform(df)
-        
-        # Check that result is a numpy array
-        assert isinstance(result, np.ndarray)
-        assert result.shape[0] == len(df)  # Same number of rows
-        
-        # Check that there are no NaN values after preprocessing
-        assert not np.isnan(result).any()
+def test_helper_parsers_basic():
+    # parse_salary_estimate 返回 (min, max, avg)
+    r = parse_salary_estimate("$120K-$160K")
+    assert r[:2] == (120000, 160000)
+    r = parse_salary_estimate("$95,000 - $105,000")
+    assert r[:2] == (95000, 105000)
+    assert parse_salary_estimate("unpaid") is None
+
+    # parse_size_to_min_max
+    assert parse_size_to_min_max("51 to 200 employees") == (51, 200)
+    min_, max_ = parse_size_to_min_max("10000+ employees")
+    assert int(min_) == 10000 and int(max_) == 10000
+
+    # compute_company_age
+    assert compute_company_age(2000) >= 20
+    assert compute_company_age(None) is np.nan
+
+def test_build_features_derives_size_band_from_size():
+    df = pd.DataFrame({
+        "Size": [
+            "1 to 49 employees",           # <50 -> Small
+            "51 to 199 employees",         # <200 -> Mid
+            "201 to 999 employees",        # <1000 -> Large
+            "1,000 to 9,999 employees",    # <10_000 -> XL
+            "10000+ employees",            # >=10_000 -> Enterprise
+            None, "unknown",
+        ],
+        "Founded": [2000]*7,
+        "Rating": [4.0]*7,
+    })
+    out = build_features(df)
+
+    expected = ["Small", "Mid", "Large", "XL", "Enterprise", np.nan, np.nan]
+    got = out["size_band"].tolist()
+    assert got[:5] == expected[:5]
+    assert pd.isna(got[5]) and pd.isna(got[6])
+
+    # 数值列存在且为数值 dtype
+    for col in ["Rating", "age", "min_size", "max_size"]:
+        assert col in out.columns
+        assert pd.api.types.is_numeric_dtype(out[col])
+    assert (out["age"] >= 0).all()

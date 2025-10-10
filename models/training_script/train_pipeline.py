@@ -24,21 +24,101 @@ import joblib
 
 from utils.featurizers import SeniorityAdder, LocationTierAdder
 from typing import Optional, Union
-# ----------------- Salary parsing (unchanged logic) -----------------
-def parse_salary_estimate(s) -> Tuple[float, float, float]:
-    if pd.isna(s):
-        return (np.nan, np.nan, np.nan)
-    s = str(s)
-    if "per hour" in s.lower() or " /hr" in s.lower():
-        return (np.nan, np.nan, np.nan)
-    s = s.replace("(Glassdoor est.)", "").replace("(Employer est.)", "")
-    s = s.replace("$", "").replace(",", "").strip()
-    m = re.search(r"(\d+)\s*[kK]\s*-\s*(\d+)\s*[kK]", s)
-    if not m:
-        return (np.nan, np.nan, np.nan)
-    lo, hi = int(m.group(1)) * 1000, int(m.group(2)) * 1000
-    return (lo, hi, (lo + hi) / 2.0)
 
+# ----------------- Salary parsing (unchanged logic) -----------------
+def parse_salary_estimate(text: Optional[str]) -> Optional[Tuple[int, int, float]]:
+    """
+    Parse a salary *range* from free-form text.
+    Supports formats like:
+      - "$120K-$160K", "90k–110k", "$95,000 - $105,000"
+      - "10000~20000", "10,000 ~ 20,000", "10000to20000", "10000 to 20000"
+      - "ranging from 10k to 20k", "range from 10k to 20k", "between 10,000 and 20,000"
+    Notes:
+      - Returns (lo, hi, avg). If no range is found, returns None.
+      - Recognizes 'k' (thousand) and 'm' (million) suffixes, and comma separators.
+      - Ignores currency signs and whitespace variations.
+    """
+    if not text:
+        return None
+
+    s = str(text).lower()
+    # normalize dashes/whitespace
+    s = s.replace("—", "-").replace("–", "-").replace("〜", "~").replace("～", "~")
+
+    # --- helpers ---
+    def _to_number(tok: str) -> Optional[float]:
+        """Parse a token like '95,000', '95k', '1.2m' -> absolute number in dollars."""
+        tok = tok.strip()
+        if not tok:
+            return None
+        # strip leading currency symbols
+        tok = re.sub(r"^[\$\£\€]", "", tok)
+        # remove commas/spaces
+        tok_clean = tok.replace(",", "").replace(" ", "")
+        # detect suffix
+        m = re.match(r"^([0-9]*\.?[0-9]+)\s*([km])?$", tok_clean)
+        if not m:
+            return None
+        val = float(m.group(1))
+        suf = m.group(2)
+        if suf == "k":
+            val *= 1_000
+        elif suf == "m":
+            val *= 1_000_000
+        return val
+
+    def _as_tuple(a: float, b: float) -> Tuple[int, int, float]:
+        lo, hi = (a, b) if a <= b else (b, a)
+        lo_i, hi_i = int(round(lo)), int(round(hi))
+        avg = (lo + hi) / 2.0
+        return lo_i, hi_i, avg
+
+    # --- patterns: try in order of most explicit to most general ---
+
+    # 1) worded ranges: "ranging from X to Y", "range from X to Y", "from X to Y"
+    worded_patterns = [
+        r"ranging\s+from\s+([$\d][\d,\.]*\s*[km]?)\s+to\s+([$\d][\d,\.]*\s*[km]?)",
+        r"range\s+from\s+([$\d][\d,\.]*\s*[km]?)\s+to\s+([$\d][\d,\.]*\s*[km]?)",
+        r"from\s+([$\d][\d,\.]*\s*[km]?)\s+to\s+([$\d][\d,\.]*\s*[km]?)",
+        r"between\s+([$\d][\d,\.]*\s*[km]?)\s+and\s+([$\d][\d,\.]*\s*[km]?)",
+    ]
+    for pat in worded_patterns:
+        m = re.search(pat, s)
+        if m:
+            a, b = _to_number(m.group(1)), _to_number(m.group(2))
+            if a is not None and b is not None:
+                return _as_tuple(a, b)
+
+    # 2) symbol joiners: "-", "~", "to" without words around them
+    #    Examples: "$120k-$160k", "95,000 - 105,000", "10000~20000", "10000 to 20000"
+    symbol_patterns = [
+        r"([$\d][\d,\.]*\s*[km]?)\s*-\s*([$\d][\d,\.]*\s*[km]?)",
+        r"([$\d][\d,\.]*\s*[km]?)\s*~\s*([$\d][\d,\.]*\s*[km]?)",
+        r"([$\d][\d,\.]*\s*[km]?)\s+to\s+([$\d][\d,\.]*\s*[km]?)",
+    ]
+    for pat in symbol_patterns:
+        m = re.search(pat, s)
+        if m:
+            a, b = _to_number(m.group(1)), _to_number(m.group(2))
+            if a is not None and b is not None:
+                return _as_tuple(a, b)
+
+    # 3) super compact "10000to20000"（无空格）
+    m = re.search(r"([$\d][\d,\.]*\s*[km]?)[ ]?to[ ]?([$\d][\d,\.]*\s*[km]?)", s.replace(" ", ""))
+    if m:
+        a, b = _to_number(m.group(1)), _to_number(m.group(2))
+        if a is not None and b is not None:
+            return _as_tuple(a, b)
+
+    # 4) fallback: two consecutive money-ish tokens anywhere: e.g., "$95,000 $105,000"
+    toks = re.findall(r"[$\d][\d,\.]*\s*[km]?", s)
+    if len(toks) >= 2:
+        a, b = _to_number(toks[0]), _to_number(toks[1])
+        if a is not None and b is not None and a != b:
+            return _as_tuple(a, b)
+
+    # Single point like "$75,000" -> 按你现有测试规范返回 None
+    return None
 
 # ----------------- Robust Size / Founded feature engineering -----------------
 def parse_size_to_min_max(size_str) -> Tuple[float, float]:

@@ -81,8 +81,7 @@ US_STATES = us_locations.US_STATES
 STATE_TO_CITIES = us_locations.STATE_TO_CITIES
 
 OPENAI_MODEL = getattr(constants, "OPENAI_MODEL", os.environ.get("OPENAI_MODEL", "gpt-4o-mini"))
-
-SIZE_BANDS = ["Small","Mid","Large","XL","Enterprise"]
+SIZE_BANDS   = getattr(constants, "SIZE_BANDS", ["Small","Mid","Large","XL","Enterprise"])
 
 
 def predict_point_range(df_row: pd.DataFrame) -> Tuple[float, float, float]:
@@ -369,14 +368,17 @@ def _to_model_row_from_ui(
     type_of_ownership: str,
     size_band: str,
 ) -> Dict[str, Any]:
+    def _nan_if_blank(s):
+        s = (s or "").strip()
+        return s if s else np.nan
     row_full = {
         "Job Title": (job_title or "").strip(),
         "Location": (location or "").strip(),
         "Rating": float(rating) if rating is not None else float("nan"),
         "age": float(age) if age not in (None, "") else float("nan"),
-        "Sector": map_sector_to_training((sector or "").strip()),
-        "Type of ownership": (type_of_ownership or "").strip(),
-        "size_band": (size_band or "").strip() if size_band in SIZE_BANDS else "",
+        "Sector": _nan_if_blank(map_sector_to_training((sector or "").strip())),
+        "Type of ownership": _nan_if_blank(type_of_ownership),
+        "size_band": _nan_if_blank(size_band if size_band in SIZE_BANDS else None),
     }
     cols = _SCHEMA["raw_inputs"]  # ensure exact order
     return {k: row_full.get(k) for k in cols}
