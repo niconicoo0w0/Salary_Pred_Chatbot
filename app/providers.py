@@ -19,33 +19,37 @@ except Exception:
     HAVE_DDG = False
 
 from utils.jd_parsing import _SECTOR_MAP, _TRAIN_SECTORS
+from utils.config import config
+from utils.logger import logger, timing_decorator, retry_decorator
+from utils.cache import cached
 
 # ---------- HTTP basics ----------
-UA_POOL = [
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121 Safari/537.36",
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36",
-]
-TIMEOUT = 12
-
 _ses = requests.Session()
-_ses.headers.update({"User-Agent": random.choice(UA_POOL), "Accept-Language": "en-US,en;q=0.8"})
+_ses.headers.update({"User-Agent": random.choice(config.USER_AGENTS), "Accept-Language": "en-US,en;q=0.8"})
 _ses.max_redirects = 5
 
 def _ua() -> Dict[str, str]:
-    return {"User-Agent": random.choice(UA_POOL), "Accept-Language": "en-US,en;q=0.8"}
+    return {"User-Agent": random.choice(config.USER_AGENTS), "Accept-Language": "en-US,en;q=0.8"}
 
+@retry_decorator(max_retries=config.MAX_RETRIES, delay=config.REQUEST_DELAY_MIN, backoff=1.5)
 def _get(url: str) -> Optional[str]:
-    for _ in range(3):
-        try:
-            r = _ses.get(url, headers=_ua(), timeout=TIMEOUT, allow_redirects=True)
-            if r.status_code == 200 and r.text:
-                r.encoding = r.apparent_encoding or r.encoding
-                return r.text
-        except Exception:
-            pass
-        time.sleep(0.6 + 0.4 * random.random())
-    return None
+    """获取URL内容，带重试机制"""
+    try:
+        logger.debug(f"Fetching URL: {url}")
+        r = _ses.get(url, headers=_ua(), timeout=config.REQUEST_TIMEOUT, allow_redirects=True)
+        if r.status_code == 200 and r.text:
+            r.encoding = r.apparent_encoding or r.encoding
+            logger.debug(f"Successfully fetched {len(r.text)} characters from {url}")
+            return r.text
+        else:
+            logger.warning(f"Failed to fetch {url}: status {r.status_code}")
+            return None
+    except requests.RequestException as e:
+        logger.warning(f"Request failed for {url}: {e}")
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error fetching {url}: {e}")
+        raise
 
 def _html_to_text(html: str) -> str:
     for parser in ("lxml", "html5lib", "html.parser"):
@@ -615,6 +619,8 @@ def compute_age(founded: Optional[int]) -> Optional[int]:
 
 
 # ---------- aggregate entry ----------
+@timing_decorator
+@cached(ttl_hours=24)
 def fetch_company_profile_fast(company: str) -> Tuple[Dict[str, Any], List[Source]]:
     sources: List[Source] = []
 

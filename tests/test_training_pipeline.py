@@ -23,9 +23,9 @@ def _toy_training_df():
     data = {
         "Rating": [4.2, np.nan, 3.9, 4.8],
         "age": [25, 10, np.nan, 50],
-        "Sector": ["Information Technology", "Finance", "UnknownSector", None],
-        "Type of ownership": ["Company - Public", "Private", "", "Company - Public"],
-        "size_band": ["Mid", "Large", "XL", ""],
+        "Sector": ["Information Technology", "Finance", "UnknownSector", "Information Technology"],
+        "Type of ownership": ["Company - Public", "Private", "Company - Private", "Company - Public"],
+        "size_band": ["Mid", "Large", "XL", "Mid"],
         "Job Title": ["Software Engineer II", "Junior Data Scientist", "VP of Engineering", "Staff ML Engineer"],
         "Location": ["San Jose, CA", "Austin, TX", "Remote", "Seattle, WA"],
         "seniority": ["senior", "junior", "vp", "staff"],
