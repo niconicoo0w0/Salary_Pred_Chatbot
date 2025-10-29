@@ -84,17 +84,17 @@ def stub_modules(monkeypatch):
     _setmod("utils.jd_parsing", jd)
     setattr(utils_pkg, "jd_parsing", jd)       # ✅
 
-    # ---- fake utils.featurizers / constants ----
+    # ---- fake utils.featurizers / config ----
     feat = ModuleType("utils.featurizers")
     _setmod("utils.featurizers", feat)
     setattr(utils_pkg, "featurizers", feat)    # ✅
 
-    consts = ModuleType("utils.constants")
+    consts = ModuleType("utils.config")
     consts.PIPELINE_PATH = "models/pipeline_new.pkl"
     consts.OPENAI_MODEL = "gpt-4o-mini"
     consts.SIZE_BANDS = ["Small","Mid","Large","XL","Enterprise"]
-    _setmod("utils.constants", consts)
-    setattr(utils_pkg, "constants", consts)    # ✅
+    _setmod("utils.config", consts)
+    setattr(utils_pkg, "config", consts)    # ✅
 
     # ---- fake agent.CompanyAgent ----
     agent = ModuleType("agent")
@@ -137,7 +137,7 @@ def stub_modules(monkeypatch):
     
     yield
     
-    for attr in ("helpers","us_locations","jd_parsing","featurizers","constants"):
+    for attr in ("helpers","us_locations","jd_parsing","featurizers","config"):
         if hasattr(utils_pkg, attr):
             delattr(utils_pkg, attr)
 

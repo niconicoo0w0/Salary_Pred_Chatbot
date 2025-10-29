@@ -16,13 +16,12 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-
 # --- Local project imports (must exist in project root)
 from utils import featurizers
 from utils import helpers
 from utils import jd_parsing
 from utils import us_locations
-from utils import constants
+from utils import config
 
 # --- Optional LLM client ---
 try:
@@ -41,17 +40,19 @@ except Exception:
     _agent = None
 
 # --- Load pipeline & schema ---
-PIPELINE_PATH = os.environ.get("PIPELINE_PATH", getattr(constants, "PIPELINE_PATH", "models/pipeline_new.pkl"))
-SCHEMA_PATH   = os.environ.get("SCHEMA_PATH", "models/schema.json")
+PIPELINE_PATH = config.PIPELINE_PATH
+SCHEMA_PATH   = config.SCHEMA_PATH
+OPENAI_MODEL  = config.OPENAI_MODEL
+SIZE_BANDS    = config.SIZE_BANDS
 
-# Fallback schema (must match training exactly)
+# Fallback schema
 _FALLBACK_SCHEMA = {
     "raw_inputs": ["Rating","age","Sector","Type of ownership","size_band","Job Title","Location"],
     "numeric": ["Rating","age"],
     "categorical_base": ["Sector","Type of ownership","size_band"],
     "added_by_featurizers": ["seniority","loc_tier"]
 }
-
+\
 try:
     with open(SCHEMA_PATH, "r") as f:
         _SCHEMA = (f.read() or "").strip()
@@ -80,17 +81,13 @@ CITY_REGEX = jd_parsing.CITY_REGEX
 US_STATES = us_locations.US_STATES
 STATE_TO_CITIES = us_locations.STATE_TO_CITIES
 
-OPENAI_MODEL = getattr(constants, "OPENAI_MODEL", os.environ.get("OPENAI_MODEL", "gpt-4o-mini"))
-SIZE_BANDS   = getattr(constants, "SIZE_BANDS", ["Small","Mid","Large","XL","Enterprise"])
-
-
 def predict_point_range(df_row: pd.DataFrame) -> Tuple[float, float, float]:
     y = float(pipe.predict(df_row)[0])
     return y, max(0.0, y * 0.9), y * 1.1
 
 
 def _derive_features_with_pipeline_steps(row: Dict[str, Any]) -> Dict[str, Any]:
-    """Mirror pipeline’s featurizers to expose 'seniority' and 'loc_tier' for display."""
+    """Mirror pipeline's featurizers to expose 'seniority' and 'loc_tier' for display."""
     df0 = pd.DataFrame([row], columns=_SCHEMA["raw_inputs"])
     seniority_step = pipe.named_steps.get("seniority", None)
     loc_tier_step = pipe.named_steps.get("loc_tier", None)
@@ -107,80 +104,19 @@ def _derive_features_with_pipeline_steps(row: Dict[str, Any]) -> Dict[str, Any]:
 
 
 # ---------------- Sector mapping to training set ----------------
-_TRAINING_SECTORS = set([
-    "Arts, Entertainment & Recreation",
-    "Construction, Repair & Maintenance",
-    "Oil, Gas, Energy & Utilities",
-    "Accounting & Legal",
-    "Aerospace & Defense",
-    "Agriculture & Forestry",
-    "Biotech & Pharmaceuticals",
-    "Business Services",
-    "Consumer Services",
-    "Education",
-    "Finance",
-    "Government",
-    "Health Care",
-    "Information Technology",
-    "Insurance",
-    "Manufacturing",
-    "Media",
-    "Mining & Metals",
-    "Non-Profit",
-    "Real Estate",
-    "Retail",
-    "Telecommunications",
-    "Transportation & Logistics",
-    "Travel & Tourism",
-])
-
-_SECTOR_CANON = {
-    # common variants -> training sector
-    "entertainment & media": "Media",
-    "media & entertainment": "Media",
-    "entertainment": "Media",
-    "telecom": "Telecommunications",
-    "information technology services": "Information Technology",
-    "it": "Information Technology",
-    "healthcare": "Health Care",
-    "biotech": "Biotech & Pharmaceuticals",
-    "pharmaceuticals": "Biotech & Pharmaceuticals",
-    "pharma": "Biotech & Pharmaceuticals",
-    "banking": "Finance",
-    "financial services": "Finance",
-    "insurance & finance": "Finance",
-    "logistics": "Transportation & Logistics",
-    "transportation": "Transportation & Logistics",
-    "aerospace": "Aerospace & Defense",
-    "defense": "Aerospace & Defense",
-    "construction": "Construction, Repair & Maintenance",
-    "repair & maintenance": "Construction, Repair & Maintenance",
-    "education & training": "Education",
-    "nonprofit": "Non-Profit",
-    "non-profit": "Non-Profit",
-    "retail & e-commerce": "Retail",
-    "e-commerce": "Retail",
-    "consumer": "Consumer Services",
-    "government & public sector": "Government",
-    "public sector": "Government",
-    "oil & gas": "Oil, Gas, Energy & Utilities",
-    "energy & utilities": "Oil, Gas, Energy & Utilities",
-    "mining": "Mining & Metals",
-    "metals": "Mining & Metals",
-}
 
 def map_sector_to_training(s: Optional[str]) -> Optional[str]:
     if not s:
         return None
     t = str(s).strip()
     low = t.lower()
-    if low in _SECTOR_CANON:
-        return _SECTOR_CANON[low]
+    if low in jd_parsing._SECTOR_MAP:
+        return jd_parsing._SECTOR_MAP[low]
     # direct match
-    if t in _TRAINING_SECTORS:
+    if t in jd_parsing._TRAIN_SECTORS:
         return t
     # lenient contain checks
-    for k, v in _SECTOR_CANON.items():
+    for k, v in jd_parsing._SECTOR_MAP.items():
         if k in low:
             return v
     return t  # keep original; OneHot(handle_unknown="ignore") will be safe

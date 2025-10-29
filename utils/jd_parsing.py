@@ -10,14 +10,6 @@ ROLE_KEYWORDS = [
     "mlops engineer", "research scientist", "nlp engineer", "computer vision engineer",
     "generative ai engineer", "deep learning engineer"
 ]
-
-# Regex patterns for extracting job titles
-TITLE_REGEXES = [
-    r"(?im)^\s*job\s*title\s*[:\-]\s*(.+)$",
-    r"(?im)^\s*title\s*[:\-]\s*(.+)$",
-    r"(?im)^\s*(?:position|role)\s*[:\-]\s*(.+)$",
-]
-
 # Noise line hints to filter out irrelevant content
 NOISE_LINE_HINTS = [
     "logo", "share", "save", "easy apply", "promoted", "actively reviewing",
@@ -105,6 +97,7 @@ _SECTOR_MAP = {
     "semiconductor":                     "Information Technology",
     "semiconductors":                    "Information Technology",
     "computer hardware":                 "Information Technology",
+    "it":                                "Information Technology",
 
     # --- FINANCE (incl. fintech/payments) ---
     "financial technology":              "Finance",

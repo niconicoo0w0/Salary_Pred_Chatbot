@@ -13,6 +13,17 @@ class Config:
     # Model configuration
     PIPELINE_PATH: str = os.getenv("PIPELINE_PATH", "models/pipeline_new.pkl")
     SCHEMA_PATH: str = os.getenv("SCHEMA_PATH", "models/schema.json")
+    
+    # Training inputs (exactly as in training)
+    NUMERIC: list[str] = None
+    CATEGORICAL_BASE: list[str] = None
+    RAW_INPUTS: list[str] = None
+
+    # UI defaults / choices
+    SIZE_BANDS: list[str] = None
+
+    # OpenAI configuration
+    OPENAI_MODEL: str = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
     # Web request configuration
     REQUEST_TIMEOUT: int = int(os.getenv("REQUEST_TIMEOUT", "12"))
@@ -43,7 +54,18 @@ class Config:
 
     def __post_init__(self):
         """Post-initialization: populate defaults and apply overrides"""
+        # ----- Training/Schema constants -----
+        if self.NUMERIC is None:
+            self.NUMERIC = ["Rating", "age"]
+        if self.CATEGORICAL_BASE is None:
+            self.CATEGORICAL_BASE = ["Sector", "Type of ownership", "size_band"]
+        if self.RAW_INPUTS is None:
+            self.RAW_INPUTS = self.NUMERIC + self.CATEGORICAL_BASE + ["Job Title", "Location"]
 
+        # ----- UI choices -----
+        if self.SIZE_BANDS is None:
+            self.SIZE_BANDS = ["Small", "Mid", "Large", "XL", "Enterprise"]
+            
         # Default User-Agent set
         if self.USER_AGENTS is None:
             self.USER_AGENTS = [
