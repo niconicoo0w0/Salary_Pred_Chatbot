@@ -403,14 +403,12 @@ class TestGlobalCache:
     def test_global_cache_creation_enabled(self):
         """Test global cache creation when enabled"""
         # Test that cache is created and is a TTLCache instance
-        from utils.cache import cache, TTLCache
         assert cache is not None
         assert isinstance(cache, TTLCache)
     
     def test_global_cache_creation_disabled(self):
         """Test global cache creation when disabled"""
         # Test that cache exists (it's created at module level)
-        from utils.cache import cache
         assert cache is not None
 
 class TestCacheEdgeCases:

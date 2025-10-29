@@ -3,6 +3,9 @@ import re
 import unicodedata
 import numpy as np
 from typing import Union, Optional, Tuple, Any, Dict
+from utils.jd_parsing import NOISE_LINE_HINTS
+from utils.jd_parsing import ROLE_KEYWORDS
+from utils.us_locations import US_STATES
 
 def titlecase(s: str) -> str:
     """Convert string to title case."""
@@ -11,7 +14,6 @@ def titlecase(s: str) -> str:
 
 def looks_like_location(text: str) -> bool:
     """Check if text looks like a location (city, state format)."""
-    from .us_locations import US_STATES
     
     t = (text or "").strip().lower()
     if re.match(r"^[a-z\s]+,\s*[a-z]{2}$", t):  # "san jose, ca"
@@ -43,12 +45,10 @@ def strip_paren_noise(title: str) -> str:
 
 def looks_like_noise_line(line_lower: str) -> bool:
     """Check if line looks like noise content."""
-    from .jd_parsing import NOISE_LINE_HINTS
     return any(h in line_lower for h in NOISE_LINE_HINTS)
 
 def candidate_title_from_line(line: str) -> bool:
     """Check if line could be a job title."""
-    from .jd_parsing import ROLE_KEYWORDS
     
     t = line.strip()
     if not 3 <= len(t) <= 80:
