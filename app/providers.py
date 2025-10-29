@@ -33,7 +33,6 @@ def _ua() -> Dict[str, str]:
 
 @retry_decorator(max_retries=config.MAX_RETRIES, delay=config.REQUEST_DELAY_MIN, backoff=1.5)
 def _get(url: str) -> Optional[str]:
-    """获取URL内容，带重试机制"""
     try:
         logger.debug(f"Fetching URL: {url}")
         r = _ses.get(url, headers=_ua(), timeout=config.REQUEST_TIMEOUT, allow_redirects=True)
@@ -299,39 +298,6 @@ def _normalize_hq(s: str) -> Tuple[Optional[str], Optional[str]]:
     # no US state, return the last "like city" part
     return (parts[-1] if parts else None, None)
 
-# _SECTOR_MAP = {
-#     # normalize based on infobox "industry" field (can be extended)
-#     "cloud computing":"Information Technology",
-#     "data warehousing":"Information Technology",
-#     "data analytics":"Information Technology",
-#     "software":"Software",
-#     "application software":"Software",
-#     "computer software":"Software",
-#     "information technology":"Information Technology",
-#     "consumer electronics":"Information Technology",
-#     "social media":"Information Technology",
-#     "internet":"Information Technology",
-#     "e-commerce":"Retail",
-#     "retail":"Retail",
-#     "transportation":"Transportation",
-#     "ride-hailing":"Transportation",
-#     "food delivery":"Delivery",
-#     "delivery":"Delivery",
-#     "entertainment":"Entertainment & Media",
-#     "media":"Entertainment & Media",
-#     "semiconductor":"Semiconductors",
-#     "semiconductors":"Semiconductors",
-#     "financial technology":"Information Technology",
-#     "payment processing":"Information Technology",
-#     # extend: Stripe/Snowflake/Airbnb etc. common expressions"
-#     "fintech":"Information Technology",
-#     "payments":"Information Technology",
-#     "data cloud":"Information Technology",
-#     "cloud data":"Information Technology",
-#     "online marketplace":"Information Technology",
-#     "travel":"Transportation"
-# }
-
 def _align_sector_to_training(sector: Optional[str]) -> str:
     """
     Ensure the sector string is one of the TRAIN labels.
@@ -385,7 +351,6 @@ def _clean_paren_year(s: str) -> str:
 
 _WEBSITE_RE = re.compile(r"([a-z0-9][a-z0-9\-\._]*\.[a-z]{2,})(?:/[^\s]*)?", re.I)
 def _normalize_website(s: str) -> Optional[str]:
-    """把 'www .apple .com' → 'apple.com' 形式的域名做清洗提取"""
     if not s:
         return None
     t = re.sub(r"\s*\.\s*", ".", s)  # remove spaces between domain points
@@ -396,7 +361,6 @@ def _normalize_website(s: str) -> Optional[str]:
     return None
 
 def _extract_domains_from_html_cell(html_cell: str) -> List[str]:
-    """从一个 TD 的 HTML 片段中提取所有 href 域名（去重）"""
     try:
         soup = BeautifulSoup(html_cell, "html.parser")
         domains = []

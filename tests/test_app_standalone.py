@@ -1,4 +1,4 @@
-# tests/test_app_standalone.py - Test app functions without importing the module
+# tests/test_app_standalone.py — Test app functions without importing the full module
 import sys
 import pytest
 import pandas as pd
@@ -9,15 +9,15 @@ from unittest.mock import Mock, patch, MagicMock
 project_root = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(project_root))
 
-# Copy the functions we want to test to avoid importing the full module
+# Copy the minimal functions we want to test to avoid importing the entire app module
 def map_sector_to_training(s):
-    """Map sector to training set"""
+    """Map a free-form sector string to one of the training sectors when possible."""
     if not s:
         return None
     t = str(s).strip()
     low = t.lower()
-    
-    # Training sectors
+
+    # Training sectors (closed list used by the model)
     TRAINING_SECTORS = set([
         "Arts, Entertainment & Recreation",
         "Construction, Repair & Maintenance",
@@ -44,8 +44,8 @@ def map_sector_to_training(s):
         "Transportation & Logistics",
         "Travel & Tourism",
     ])
-    
-    # Sector canonicalization
+
+    # Canonicalization dictionary: common variants -> training sector
     SECTOR_CANON = {
         "entertainment & media": "Media",
         "media & entertainment": "Media",
@@ -79,20 +79,23 @@ def map_sector_to_training(s):
         "mining": "Mining & Metals",
         "metals": "Mining & Metals",
     }
-    
+
+    # Exact canonical match
     if low in SECTOR_CANON:
         return SECTOR_CANON[low]
-    # direct match
+    # Exact training label match
     if t in TRAINING_SECTORS:
         return t
-    # lenient contain checks
+    # Lenient substring checks
     for k, v in SECTOR_CANON.items():
         if k in low:
             return v
-    return t  # keep original; OneHot(handle_unknown="ignore") will be safe
+    # Keep original; OneHotEncoder(handle_unknown="ignore") makes this safe
+    return t
+
 
 def employees_to_size_band(n):
-    """Convert employee count to size band"""
+    """Convert employee count to size band."""
     try:
         if n is None or (isinstance(n, float) and np.isnan(n)):
             return None
@@ -105,8 +108,9 @@ def employees_to_size_band(n):
     if n < 10000: return "XL"
     return "Enterprise"
 
+
 def coerce_size_label_to_band(lbl):
-    """Coerce size label to band"""
+    """Normalize a size label string to one of the allowed bands."""
     if not lbl:
         return None
     t = str(lbl).strip().lower()
@@ -114,7 +118,7 @@ def coerce_size_label_to_band(lbl):
     for b in SIZE_BANDS:
         if b.lower() == t:
             return b
-    # light normalization - check XL patterns first to avoid matching "large" in "xlarge"
+    # Light normalization — check XL patterns first to avoid matching "large" inside "xlarge"
     if t in {"xl","x-large","x large","extra large","xlarge"}: return "XL"
     if "small" in t: return "Small"
     import re
@@ -123,9 +127,10 @@ def coerce_size_label_to_band(lbl):
     if "enterprise" in t: return "Enterprise"
     return None
 
+
 def choose_size_band_from_profile(prof):
-    """Choose size band from profile"""
-    # priority: size_band -> Size -> size_label -> employees -> (min,max)
+    """Choose size band from heterogeneous company profile fields."""
+    # Priority order: size_band -> Size -> size_label -> employees -> (min,max midpoint)
     if prof.get("size_band"):
         return coerce_size_label_to_band(prof.get("size_band"))
     if prof.get("Size"):
@@ -136,7 +141,7 @@ def choose_size_band_from_profile(prof):
         if b: return b
     if prof.get("employees") is not None:
         return employees_to_size_band(prof.get("employees"))
-    # fallback: try min/max midpoint
+    # Fallback: use midpoint of min/max if present
     if prof.get("min_size") is not None and prof.get("max_size") is not None:
         try:
             mid = (float(prof["min_size"]) + float(prof["max_size"])) / 2.0
@@ -145,30 +150,34 @@ def choose_size_band_from_profile(prof):
             pass
     return None
 
+
 def normalize_company_profile_to_schema(prof):
-    """Map whatever the agent returned to the exact training inputs we need."""
+    """Map whatever the agent returned to the exact training input schema."""
     return {
         "Sector": map_sector_to_training(prof.get("Sector") or prof.get("sector")),
         "Type of ownership": prof.get("Type of ownership") or prof.get("ownership"),
         "size_band": choose_size_band_from_profile(prof),
-        "age": prof.get("age") or prof.get("company_age"),  # agent可能给 age 或 company_age
+        # The agent might provide either "age" or "company_age"
+        "age": prof.get("age") or prof.get("company_age"),
         "hq_city": prof.get("hq_city"),
         "hq_state": prof.get("hq_state"),
         "__sources__": prof.get("__sources__", []),
     }
 
+
 def detect_job_title(jd_text):
-    """Detect job title from job description"""
+    """Detect a job title from the job description text."""
     if not jd_text or not jd_text.strip():
         return None
-    
-    # Import helpers
+
+    # Import helpers locally to keep this test file self-contained from the app module
     from utils.helpers import clean_text, strip_paren_noise, looks_like_location, looks_like_noise_line
     import re
-    
-    # 简约版：沿用你 helpers/jd_parsing 的清洗+启发式
+
+    # Simple heuristic mirroring helpers/jd_parsing cleaning + title cues
     txt = clean_text(jd_text)
-    # 1) 明确字段
+
+    # 1) Explicit fields
     pats = [
         r"(?im)^\s*(?:job\s*)?title\s*[:\-]\s*(.+)$",
         r"(?im)^\s*(?:position|role)\s*[:\-]\s*(.+)$",
@@ -179,32 +188,38 @@ def detect_job_title(jd_text):
             cand = strip_paren_noise(m.group(1).strip())
             if cand and not looks_like_location(cand):
                 return cand.title()
-    # 2) 前几行找头衔类词
+
+    # 2) Look for title-like words in the first few lines
     lines = [ln.strip() for ln in txt.split("\n") if ln.strip()]
     for ln in lines[:25]:
         if looks_like_noise_line(ln.lower()):
             continue
         if re.search(r"\b(engineer|scientist|analyst|developer|researcher|manager|architect|designer)\b", ln.lower()):
-            # Extract just the job title part, not the whole line
-            # Look for patterns like "Senior Machine Learning Engineer" in the line
-            title_match = re.search(r"\b(Senior\s+)?(Machine\s+Learning\s+)?(Engineer|Scientist|Analyst|Developer|Researcher|Manager|Architect|Designer)\b", ln, re.IGNORECASE)
+            # Prefer extracting a clean title phrase like “Senior Machine Learning Engineer”
+            title_match = re.search(
+                r"\b(Senior\s+)?(Machine\s+Learning\s+)?(Engineer|Scientist|Analyst|Developer|Researcher|Manager|Architect|Designer)\b",
+                ln,
+                re.IGNORECASE
+            )
             if title_match:
                 return title_match.group(0).title()
-            # Fallback to the whole line if no specific pattern found
+            # Fallback: use the whole line stripped of parentheses noise
             cand = strip_paren_noise(ln.strip())
             if cand and not looks_like_location(cand):
                 return cand.title()
     return None
 
+
 def fmt_none(v):
     """Format None/empty values for display."""
     return "—" if (v is None or (isinstance(v, float) and np.isnan(v)) or v == "" or v == []) else str(v)
 
+
 def llm_explain(context, derived, point, low, high):
-    """Generate LLM explanation"""
-    # Mock client for testing
+    """Generate an explanation string; in tests we do not call a real LLM client."""
+    # Mock client path for tests (no OpenAI calls here)
     client = None
-    
+
     if client is None or not hasattr(client, 'chat'):
         parts = [
             f"Predicted base salary: ${point:,.0f} (range ${low:,.0f}-${high:,.0f}).",
@@ -219,111 +234,127 @@ def llm_explain(context, derived, point, low, high):
             "Likely drivers: market (location tier), seniority inferred from title, size band/age, sector/ownership.",
         ]
         return " ".join(parts)
-    
-    # This would be the real LLM call, but we're mocking it
+
+    # Real LLM path would go here (not executed in tests)
     return "Mock LLM explanation"
 
-# Test functions
+
+# ----------------------- Tests -----------------------
+
 def test_map_sector_to_training_exact_match():
-    """Test sector mapping with exact match"""
+    """Exact match should pass through unchanged."""
     result = map_sector_to_training("Information Technology")
     assert result == "Information Technology"
 
+
 def test_map_sector_to_training_canonical_match():
-    """Test sector mapping with canonical match"""
+    """Canonicalization dictionary should map to training label."""
     result = map_sector_to_training("it")
     assert result == "Information Technology"
 
+
 def test_map_sector_to_training_no_match():
-    """Test sector mapping with no match"""
+    """Unknown sector should be returned as-is (safe with OHE ignore-unknown)."""
     result = map_sector_to_training("Unknown Sector")
     assert result == "Unknown Sector"
 
+
 def test_map_sector_to_training_empty():
-    """Test sector mapping with empty input"""
+    """Empty/None inputs should return None."""
     assert map_sector_to_training("") is None
     assert map_sector_to_training(None) is None
 
+
 def test_employees_to_size_band_small():
-    """Test employee count to size band - small"""
+    """Employees <50 -> Small."""
     assert employees_to_size_band(25) == "Small"
     assert employees_to_size_band(49) == "Small"
 
+
 def test_employees_to_size_band_mid():
-    """Test employee count to size band - mid"""
+    """50–199 -> Mid."""
     assert employees_to_size_band(50) == "Mid"
     assert employees_to_size_band(199) == "Mid"
 
+
 def test_employees_to_size_band_large():
-    """Test employee count to size band - large"""
+    """200–999 -> Large."""
     assert employees_to_size_band(200) == "Large"
     assert employees_to_size_band(999) == "Large"
 
+
 def test_employees_to_size_band_xl():
-    """Test employee count to size band - XL"""
+    """1000–9,999 -> XL."""
     assert employees_to_size_band(1000) == "XL"
     assert employees_to_size_band(9999) == "XL"
 
+
 def test_employees_to_size_band_enterprise():
-    """Test employee count to size band - enterprise"""
+    """≥10,000 -> Enterprise."""
     assert employees_to_size_band(10000) == "Enterprise"
     assert employees_to_size_band(50000) == "Enterprise"
 
+
 def test_employees_to_size_band_invalid():
-    """Test employee count to size band with invalid input"""
+    """Non-numeric/None/NaN -> None."""
     assert employees_to_size_band(None) is None
     assert employees_to_size_band(np.nan) is None
     assert employees_to_size_band("invalid") is None
 
+
 def test_coerce_size_label_to_band_exact():
-    """Test size label coercion with exact match"""
+    """Exact label should pass through."""
     assert coerce_size_label_to_band("Small") == "Small"
     assert coerce_size_label_to_band("Mid") == "Mid"
     assert coerce_size_label_to_band("Large") == "Large"
     assert coerce_size_label_to_band("XL") == "XL"
     assert coerce_size_label_to_band("Enterprise") == "Enterprise"
 
+
 def test_coerce_size_label_to_band_normalization():
-    """Test size label coercion with normalization"""
+    """Loose normalization patterns should map to valid bands."""
     assert coerce_size_label_to_band("small") == "Small"
     assert coerce_size_label_to_band("middle") == "Mid"
     assert coerce_size_label_to_band("x-large") == "XL"
     assert coerce_size_label_to_band("xlarge") == "XL"
 
+
 def test_coerce_size_label_to_band_invalid():
-    """Test size label coercion with invalid input"""
+    """Unknown/empty should return None."""
     assert coerce_size_label_to_band("") is None
     assert coerce_size_label_to_band(None) is None
     assert coerce_size_label_to_band("Unknown") is None
 
+
 def test_choose_size_band_from_profile():
-    """Test size band selection from profile"""
-    # Test with size_band
+    """Select size band based on best available profile fields."""
+    # size_band provided
     profile = {"size_band": "Mid"}
     assert choose_size_band_from_profile(profile) == "Mid"
-    
-    # Test with Size
+
+    # Size provided
     profile = {"Size": "Large"}
     assert choose_size_band_from_profile(profile) == "Large"
-    
-    # Test with size_label
+
+    # size_label provided
     profile = {"size_label": "XL"}
     assert choose_size_band_from_profile(profile) == "XL"
-    
-    # Test with employees
+
+    # employees provided
     profile = {"employees": 1000}
     assert choose_size_band_from_profile(profile) == "XL"
-    
-    # Test with min/max
+
+    # min/max midpoint fallback
     profile = {"min_size": 400, "max_size": 600}
     assert choose_size_band_from_profile(profile) == "Large"
-    
-    # Test with no valid data
+
+    # no usable fields
     profile = {}
     assert choose_size_band_from_profile(profile) is None
 
+
 def test_normalize_company_profile_to_schema():
-    """Test company profile normalization to schema"""
+    """Normalize an agent profile dict to the training schema."""
     profile = {
         "Sector": "Information Technology",
         "Type of ownership": "Company - Public",
@@ -333,9 +364,9 @@ def test_normalize_company_profile_to_schema():
         "hq_state": "CA",
         "__sources__": [{"url": "https://example.com"}]
     }
-    
+
     result = normalize_company_profile_to_schema(profile)
-    
+
     assert result["Sector"] == "Information Technology"
     assert result["Type of ownership"] == "Company - Public"
     assert result["size_band"] == "Mid"
@@ -344,51 +375,58 @@ def test_normalize_company_profile_to_schema():
     assert result["hq_state"] == "CA"
     assert result["__sources__"] == [{"url": "https://example.com"}]
 
+
 def test_normalize_company_profile_alternative_fields():
-    """Test company profile normalization with alternative field names"""
+    """Normalize when alternative field names are used by the agent."""
     profile = {
-        "sector": "Technology",  # lowercase
-        "ownership": "Private",  # without "Type of"
-        "company_age": 5  # instead of "age"
+        "sector": "Technology",   # lowercase variant
+        "ownership": "Private",   # missing "Type of "
+        "company_age": 5          # alternative to "age"
     }
-    
+
     result = normalize_company_profile_to_schema(profile)
-    
+
     assert result["Sector"] == "Technology"
     assert result["Type of ownership"] == "Private"
     assert result["age"] == 5
 
+
 def test_detect_job_title_explicit_field():
-    """Test job title detection with explicit field"""
+    """Detect job title from explicit 'Job Title:' field."""
     jd = "Job Title: Senior Software Engineer\nLocation: San Francisco, CA"
     result = detect_job_title(jd)
     assert result == "Senior Software Engineer"
 
+
 def test_detect_job_title_position_field():
-    """Test job title detection with position field"""
+    """Detect job title from 'Position:' field."""
     jd = "Position: Data Scientist\nLocation: New York, NY"
     result = detect_job_title(jd)
     assert result == "Data Scientist"
 
+
 def test_detect_job_title_heuristic():
-    """Test job title detection with heuristic"""
+    """Detect job title using heuristic scan of the first lines."""
     jd = "We are looking for a Senior Machine Learning Engineer to join our team."
     result = detect_job_title(jd)
     assert result == "Senior Machine Learning Engineer"
 
+
 def test_detect_job_title_empty():
-    """Test job title detection with empty input"""
+    """Empty/None JD -> None."""
     assert detect_job_title("") is None
     assert detect_job_title(None) is None
 
+
 def test_detect_job_title_no_match():
-    """Test job title detection with no match"""
+    """Random text with no title cues -> None."""
     jd = "This is just some random text without any job titles."
     result = detect_job_title(jd)
     assert result is None
 
+
 def test_llm_explain_no_client():
-    """Test LLM explanation without client"""
+    """Offline explanation path should include inputs and the predicted number."""
     context = {
         "Job Title": "Software Engineer",
         "Location": "San Francisco, CA",
@@ -399,7 +437,7 @@ def test_llm_explain_no_client():
         "size_band": "Mid"
     }
     derived = {"seniority": "senior", "loc_tier": "high"}
-    
+
     result = llm_explain(context, derived, 100000, 90000, 110000)
     assert "Predicted base salary: $100,000" in result
     assert "Software Engineer" in result

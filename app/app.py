@@ -134,7 +134,6 @@ _TRAINING_SECTORS = set([
     "Travel & Tourism",
 ])
 
-# minimal, robust normalization（只在明显同义时做映射；否则保留原词以便 OHE 忽略未知）
 _SECTOR_CANON = {
     # common variants -> training sector
     "entertainment & media": "Media",
@@ -640,5 +639,4 @@ with gr.Blocks(title="Salary Prediction Chatbot") as demo:
             )
 
 if __name__ == "__main__":
-    # 需要公网分享可在 demo.launch(share=True)
     demo.launch()

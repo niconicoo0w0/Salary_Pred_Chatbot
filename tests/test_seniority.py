@@ -22,7 +22,7 @@ from utils.featurizers import extract_seniority, SeniorityAdder
     ("Engineer 2", "senior"),
     ("Senior Machine Learning Engineer", "senior"),
     ("Staff ML Engineer", "staff"),
-    ("Principal Scientist", "principal"),  # 实现返回 principal，而非 staff
+    ("Principal Scientist", "principal"),
     ("Lead Data Engineer", "lead"),
     ("Engineering Manager", "manager"),
     ("Director of Data", "director"),

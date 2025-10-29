@@ -19,7 +19,6 @@ def test_location_tier_adder_basic_boundaries():
     df = _toy_df()
     X, y = df[["Location"]], df["y"]
 
-    # 不提供 target_col；fit 需要 y
     adder = LocationTierAdder(loc_col="Location", drop_location=False)
     adder = adder.fit(X, y)
     out = adder.transform(X)
@@ -42,9 +41,9 @@ def test_location_tier_adder_unknown_defaults_mid_and_drop():
     adder = LocationTierAdder(drop_location=True)
     out = adder.fit(X, y).transform(X)
 
-    # Unknown City 回退至 mid（与你实现一致）
+    # Unknown City -- mid
     assert out["loc_tier"].iloc[-1] == "mid"
-    # drop_location=True 删掉 Location 列
+    # drop_location=True -- delete Location column
     assert "Location" not in out.columns
 
 def test_location_tier_adder_fit_self():

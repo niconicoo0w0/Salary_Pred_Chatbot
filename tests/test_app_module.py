@@ -6,7 +6,6 @@ from types import SimpleNamespace, ModuleType
 import types
 import pytest
 
-# ---------- 1) 预先注入假的依赖模块，随后再 import app ----------
 @pytest.fixture(autouse=True)
 def stub_modules(monkeypatch):
     import sys, re
@@ -14,15 +13,14 @@ def stub_modules(monkeypatch):
     
     added_or_replaced = {}
     def _setmod(name, module):
-        # 记住之前的模块（可能为 None）
+        # Remember the previous module (might be None)
         prev = sys.modules.get(name, None)
         added_or_replaced[name] = prev
         sys.modules[name] = module
         return module
     
-    # ✅ 先创建一个假的 utils 包并注册到 sys.modules，防止真实包被导入
     utils_pkg = ModuleType("utils")
-    utils_pkg.__path__ = []      # 标记成包
+    utils_pkg.__path__ = []      # Mark as a package
     _setmod("utils", utils_pkg)
 
     # ---- fake gradio ----
@@ -57,7 +55,7 @@ def stub_modules(monkeypatch):
     helpers.looks_like_noise_line = looks_like_noise_line
     helpers.fmt_none = fmt_none
     _setmod("utils.helpers", helpers)
-    setattr(utils_pkg, "helpers", helpers)   # ✅ 挂到假的 utils 包上
+    setattr(utils_pkg, "helpers", helpers)   # ✅ Attach to the fake utils package
 
     # ---- fake utils.us_locations ----
     usloc = ModuleType("utils.us_locations")
@@ -74,12 +72,12 @@ def stub_modules(monkeypatch):
     jd = ModuleType("utils.jd_parsing")
     jd.CITY_REGEX = re.compile(r"^[A-Za-z][A-Za-z\s\-']+$")
     def parse_jd(txt):
-        # 只要出现标记就返回我们想要的位置
+        # If the marker appears, return the location we want
         if "HAS_LOC" in (txt or ""):
             return {"location": "San Jose, CA"}
         return {"location": ""}
     jd.parse_jd = parse_jd
-    jd.NOISE_LINE_HINTS = [   # ✅ 供真实 helpers 不小心被加载时也不炸
+    jd.NOISE_LINE_HINTS = [   # ✅ If real helpers accidentally loads, it won't crash
         "equal opportunity","benefits","background check","work authorization",
         "eeo","vaccination","employer branding","about us","culture"
     ]
@@ -134,7 +132,7 @@ def stub_modules(monkeypatch):
     import joblib as _joblib_real
     monkeypatch.setattr(_joblib_real, "load", lambda p: DummyPipeline(), raising=True)
 
-    # 默认不让走在线 LLM
+    # By default do not use the online LLM
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     
     yield
@@ -143,16 +141,16 @@ def stub_modules(monkeypatch):
         if hasattr(utils_pkg, attr):
             delattr(utils_pkg, attr)
 
-    # 逐个恢复 sys.modules
+    # Restore sys.modules one by one
     for name, prev in reversed(list(added_or_replaced.items())):
         if prev is None:
-            # 我们新增的模块，直接移除
+            # Modules we added: simply remove them
             sys.modules.pop(name, None)
         else:
-            # 我们覆盖过的模块，还原原始对象
+            # Modules we overwrote: restore the original object
             sys.modules[name] = prev
 
-# 现在可以安全导入 app 了
+# It is now safe to import app
 @pytest.fixture(scope="module")
 def app_module():
     import importlib
@@ -160,7 +158,7 @@ def app_module():
     return app
 
 
-# ---------- 2) 覆盖工具函数（map/coerce/choose 等） ----------
+# ---------- 2) Override utility functions (map/coerce/choose etc.) ----------
 def test_sector_mapping_direct_and_canon(app_module):
     assert app_module.map_sector_to_training("Information Technology") == "Information Technology"
     assert app_module.map_sector_to_training("it") == "Information Technology"
@@ -185,7 +183,7 @@ def test_choose_size_band_priority(app_module):
     assert choose({"Size": "Large"}) == "Large"
     assert choose({"size_label": "XL"}) == "XL"
     assert choose({"employees": 80}) == "Mid"
-    # min/max 回退
+    # Fallback on min/max
     assert choose({"min_size": 400, "max_size": 600}) == "Large"
     assert choose({}) is None
 
@@ -201,20 +199,20 @@ def test_to_model_row_from_ui_happy(app_module):
         type_of_ownership="Company - Public",
         size_band="XL",
     )
-    # 顺序由 schema 决定
+    # Order is determined by the schema
     assert row["Job Title"] == "Senior Data Scientist"
     assert row["Location"] == "San Francisco, CA"
     assert row["Sector"] == "Information Technology"
     assert row["size_band"] == "XL"
 
 
-# ---------- 4) serve() 多分支 ----------
+# ---------- 4) serve() multi-branch ----------
 def test_serve_parse_title_and_jd_location(app_module, monkeypatch):
-    # 1) 强制 llm_explain 走离线
+    # 1) Force llm_explain to take the offline path
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.setattr(app_module, "client", None)
 
-    # 2) 关键：直接打桩位置解析 & 校验资源，避免 import/source 差异导致的不确定性
+    # 2) Key: stub location parsing & resources to avoid nondeterminism from import/source differences
     import re
     monkeypatch.setattr(app_module, "try_parse_location_from_jd", lambda txt: ("San Jose", "CA"))
     monkeypatch.setattr(app_module, "CITY_REGEX", re.compile(r"^[A-Za-z][A-Za-z\s\-']+$"), raising=False)
@@ -225,7 +223,7 @@ def test_serve_parse_title_and_jd_location(app_module, monkeypatch):
                          "TX": ["Austin", "Dallas"]},
                         raising=False)
 
-    # 不给 title/state/city，靠我们打桩的 JD 解析
+    # Leave title/state/city blank; rely on our stubbed JD parsing
     result, *_updates = app_module.serve(
         job_title="",
         state_abbrev="",
@@ -251,7 +249,7 @@ def test_serve_invalid_rating(app_module):
         job_title="Software Engineer",
         state_abbrev="CA",
         city="San Jose",
-        rating="bad",  # 非法
+        rating="bad",  # Invalid
         age=3,
         sector="IT",
         type_of_ownership="Company - Private",
@@ -264,7 +262,7 @@ def test_serve_invalid_rating(app_module):
     assert "error" in result and "must be a number" in result["error"]
 
 def test_serve_hq_location_fallback(app_module, monkeypatch):
-    # 1) 稳定位置资源 & agent & 关闭在线 LLM
+    # 1) Stabilize location resources & agent & disable online LLM
     import re
     monkeypatch.setattr(app_module, "CITY_REGEX", re.compile(r"^[A-Za-z][A-Za-z\s\-']+$"), raising=False)
     monkeypatch.setattr(app_module, "US_STATES", ["CA", "NY", "TX"], raising=False)
@@ -290,14 +288,14 @@ def test_serve_hq_location_fallback(app_module, monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.setattr(app_module, "client", None, raising=False)
 
-    # 2) 进入 HQ 回填路径：不给 state/city，JD 也不含位置
+    # 2) Enter the HQ autofill path: no state/city provided; JD doesn’t include location either
     result, *_ = app_module.serve(
         job_title="Senior Backend Engineer",
         state_abbrev="", city="",
         rating=4.5, age=8,
         sector="", type_of_ownership="", size_band="",
-        job_description_text="no HAS_LOC here",    # 不触发 JD 解析
-        company_name="Netflix",                   # 名字随意，agent 已打桩
+        job_description_text="no HAS_LOC here",    # Do not trigger JD parsing
+        company_name="Netflix",                   # Any name; agent is stubbed
         use_agent_flag=True, overwrite_defaults=True
     )
 
@@ -305,7 +303,7 @@ def test_serve_hq_location_fallback(app_module, monkeypatch):
     assert result["Inputs used by the model"]["Location"] == "San Jose, CA"
 
 def test_serve_overwrite_defaults_false(app_module):
-    # Agent 会返回 IT/Mid/12，但我们设置 overwrite_defaults=False 且传入已有值
+    # Agent would return IT/Mid/12, but we set overwrite_defaults=False and pass existing values
     result, *_ = app_module.serve(
         job_title="Senior Engineer",
         state_abbrev="CA", city="San Jose",
@@ -315,15 +313,15 @@ def test_serve_overwrite_defaults_false(app_module):
         company_name="ACME", use_agent_flag=True, overwrite_defaults=False
     )
     row = result["Inputs used by the model"]
-    # 不应被 Agent 覆写
+    # Should not be overwritten by the agent
     assert row["Sector"] == "Media"
     assert row["Type of ownership"] == "Company - Public"
     assert row["size_band"] == "XL"
-    assert row["age"] == 7.0  # 也不应被 12 覆盖
+    assert row["age"] == 7.0  # Should also not be overwritten by 12
 
 def test_serve_job_title_looks_like_location(app_module):
     result, *_ = app_module.serve(
-        job_title="San Jose, CA",  # 像位置
+        job_title="San Jose, CA",  # Looks like a location
         state_abbrev="CA", city="San Jose",
         rating=3.0, age=2,
         sector="", type_of_ownership="", size_band="",
@@ -333,9 +331,9 @@ def test_serve_job_title_looks_like_location(app_module):
     assert "error" in result and "looks like a location" in result["error"]
 
 
-# ---------- 5) llm_explain 的“有 client 但报错”路径 ----------
+# ---------- 5) llm_explain path where client exists but raises an error ----------
 def test_llm_explain_with_client_error_path(app_module, monkeypatch):
-    # 让 app_module.client 存在，且抛出异常；设置 OPENAI_API_KEY 走到该分支
+    # Make app_module.client exist and raise; set OPENAI_API_KEY to hit this branch
     class BoomClient:
         class chat:
             class completions:
@@ -356,6 +354,6 @@ def test_llm_explain_with_client_error_path(app_module, monkeypatch):
 # ---------- 6) update_city_choices ----------
 def test_update_city_choices(app_module):
     upd = app_module.update_city_choices("CA")
-    # 我们的 fake gr.update 返回 dict-like
+    # Our fake gr.update returns a dict-like object
     assert isinstance(upd, dict)
     assert "choices" in upd and "San Jose" in upd["choices"]

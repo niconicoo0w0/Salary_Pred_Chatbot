@@ -11,11 +11,11 @@ from utils.jd_parsing import parse_years_experience, parse_location, parse_salar
 @pytest.mark.parametrize("jd,years", [
     ("3+ years experience in Python", 3),
     ("At least 5 years of relevant experience", 5),
-    ("1-3 years exp.", 3),       # 实现取区间上界
-    ("0-1 year", 1),             # 同上
+    ("1-3 years exp.", 3),       # Expected: take the upper bound of the range
+    ("0-1 year", 1),             # Expected: same logic as above
     ("no experience required", None),
-    ("Minimum two years experience", None),   # 英文数字不被解析
-    ("Seven (7) years of exp", None),        # 括号里的 7 未被解析
+    ("Minimum two years experience", None),   # English word numbers are not parsed
+    ("Seven (7) years of exp", None),        # The "(7)" part is currently ignored by parsing logic
 ])
 def test_parse_years_experience(jd, years):
     assert parse_years_experience(jd) == years
@@ -34,7 +34,7 @@ def test_parse_location(jd, loc):
     ("Compensation: $150,000 - $190,000 + bonus", (150000, 190000)),
     ("Salary range: 120k–160k", (120000, 160000)),
     ("$90k-$110k base", (90000, 110000)),
-    ("Pay: $75,000", None),  # 单点工资返回 None
+    ("Pay: $75,000", None),  # A single salary number should return None
     ("unpaid internship", None),
 ])
 def test_parse_salary_range(jd, expected):
@@ -54,7 +54,7 @@ def test_parse_education(text, expected):
     assert parse_education(text) == expected
 
 def test_parse_jd():
-    """Test parsing complete job description"""
+    """Test parsing a complete job description block"""
     jd = """
     Senior Machine Learning Engineer
     Location: San Francisco, CA
