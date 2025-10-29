@@ -56,12 +56,6 @@ conda activate salary_chatbot
 # Install all required packages
 pip install -r requirements.txt
 ```
-
-> 💡 Tip: If you want to run tests or development tools, also install dev dependencies (if available):
-> ```bash
-> pip install -r requirements-dev.txt
-> ```
-
 ---
 
 ### 3️⃣ (Optional) Configure Environment Variables
