@@ -1,0 +1,12 @@
+[run]
+source =
+    app
+    utils
+omit =
+    */app/chatbot.py
+    */app/predict_api.py
+
+[report]
+omit =
+    */app/chatbot.py
+    */app/predict_api.py
