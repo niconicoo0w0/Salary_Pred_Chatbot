@@ -58,23 +58,41 @@ pip install -r requirements.txt
 ```
 ---
 
-### 3️⃣ (Optional) Configure Environment Variables
+### 3️⃣ Configure Settings (via `utils/config.py`)
 
-You can create a `.env` file (or export variables manually) to customize model paths and API settings.
+All runtime and model settings are centralized in **`utils/config.py`**
+You can edit parameters directly in the `Config` dataclass or override them using environment variables if desired.
 
-```bash
-cp .env.example .env
+Example excerpt:
+
+```python
+# utils/config.py
+from dataclasses import dataclass
+import os
+
+@dataclass
+class Config:
+    PIPELINE_PATH: str = os.getenv("PIPELINE_PATH", "models/pipeline_new.pkl")
+    SCHEMA_PATH: str = os.getenv("SCHEMA_PATH", "models/schema.json")
+
+    # Logging
+    LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
+
+    # OpenAI configuration (optional for LLM explanation)
+    OPENAI_MODEL: str = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+    OPENAI_API_KEY: str | None = os.getenv("OPENAI_API_KEY")
+
+    # Request and cache
+    REQUEST_TIMEOUT: int = int(os.getenv("REQUEST_TIMEOUT", "12"))
+    ENABLE_CACHE: bool = os.getenv("ENABLE_CACHE", "true").lower() == "true"
 ```
 
-| Variable | Description | Default |
-|-----------|--------------|----------|
-| `PIPELINE_PATH` | Path to trained model pipeline | `models/pipeline_new.pkl` |
-| `SCHEMA_PATH` | Path to model schema | `models/schema.json` |
-| `OPENAI_API_KEY` | Your OpenAI API key (optional) | — |
-| `OPENAI_MODEL` | Model for explanation | `gpt-4o-mini` |
-| `LOG_LEVEL` | Logging verbosity | `INFO` |
+You can modify these values directly in the file or through environment overrides, for example:
 
-> 🔒 If `OPENAI_API_KEY` is not set, the app automatically falls back to offline explanations.
+```bash
+export PIPELINE_PATH=models/pipeline_new.pkl
+export LOG_LEVEL=DEBUG
+```
 
 ---
 
@@ -113,14 +131,11 @@ pytest -q
 If you want to retrain the model pipeline:
 
 ```bash
-cd models/training_script
+python models/training_script/train_pipeline.py \
+  data/salary_data_cleaned.csv \
+  --out models/pipeline_new.pkl 
 
-python train_pipeline.py \
-  --input_csv ../../data/salary_data_cleaned.csv \
-  --out_path ../../models/pipeline_new.pkl
-
-# Then return to project root and relaunch
-cd ../../
+# Then relaunch
 python app/app.py
 ```
 
