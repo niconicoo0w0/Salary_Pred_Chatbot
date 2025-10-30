@@ -573,6 +573,27 @@ with gr.Blocks(title="Salary Prediction Chatbot") as demo:
                 inputs=[job_title, state, city, rating, age, sector, type_own, size_band, jd_text, company_input, use_agent, overwrite_defaults],
                 outputs=[out, state, city, age, sector, type_own, size_band]
             )
+        with gr.Tab("Chat"):
+            chat_in = gr.Textbox(label="Ask in natural language", lines=4)
+            with gr.Row():
+                chat_btn = gr.Button("Ask")
+                reset_btn = gr.Button("Start Over")
+            chat_out = gr.JSON(label="Chatbot answer")
+
+            def _chat_proxy(text):
+                import chatbot
+                # handle “yes”/“no” after reset prompt too
+                if text.strip().lower() in {"start over", "reset"}:
+                    return chatbot.reset_context()
+                return chatbot.handle_chat(text)
+
+            def _reset_proxy():
+                import chatbot
+                return chatbot.reset_context()
+
+            chat_btn.click(fn=_chat_proxy, inputs=chat_in, outputs=chat_out)
+            reset_btn.click(fn=_reset_proxy, inputs=None, outputs=chat_out)
+
 
 if __name__ == "__main__":
     demo.launch()
