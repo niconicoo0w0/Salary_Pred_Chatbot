@@ -139,6 +139,9 @@ def _extract_company(text: str) -> Optional[str]:
         r"\boffer\s+from\s+([A-Z][A-Za-z0-9& .\-]+?)" + STOP,
         r"\bat\s+([A-Z][A-Za-z0-9& .\-]+?)" + STOP,
         r"\bwith\s+([A-Z][A-Za-z0-9& .\-]+?)" + STOP,
+        r"\bcompany\s+(?:is|=)\s+([A-Z][A-Za-z0-9& .\-]+?)" + STOP,
+        r"\bwork(?:ing)?\s+at\s+([A-Z][A-Za-z0-9& .\-]+?)" + STOP,
+        r"\bwork(?:ing)?\s+for\s+([A-Z][A-Za-z0-9& .\-]+?)" + STOP,
     ]
     for pat in pats:
         m = re.search(pat, text, re.I)
@@ -224,6 +227,29 @@ def handle_chat(user_text: str) -> Dict[str, Any]:
     # 用户手动 reset
     if low in {"reset", "start over", "clear"}:
         return reset_context()
+    
+    # 0) 用户确认直接运行（可选项用默认值）
+    if _CTX.get("awaiting") == "confirm_run":
+        if low in {"yes", "y", "yeah", "ok", "okay", "sure", "run"}:
+            _CTX["awaiting"] = None
+            return _run_from_ctx()
+        elif low in {"no", "n", "nope"}:
+            _CTX["awaiting"] = None
+            return {
+                "answer": (
+                    "No problem. You can tell me any of the optional fields, e.g. "
+                    "`The company was founded in 1997` or "
+                    "`It's a public company in Media sector`."
+                ),
+                "need_more_info": True,
+                "context": _CTX,
+            }
+        else:
+            return {
+                "answer": "Reply `yes` to run with defaults, or `no` if you want to fill in more details.",
+                "need_more_info": True,
+                "context": _CTX,
+            }
 
     # 1) 处理 yes/no → 确认公司
     if _CTX.get("awaiting") == "confirm_company":
