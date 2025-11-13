@@ -579,6 +579,7 @@ with gr.Blocks(title="Salary Prediction Chatbot") as demo:
                 chat_btn = gr.Button("Ask")
                 reset_btn = gr.Button("Start Over")
             chat_out = gr.JSON(label="Chatbot answer")
+            
 
             def _chat_proxy(text):
                 import chatbot
